@@ -9,4 +9,9 @@
     <LangVersion>preview</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\LinuxOnly.cs">
+      <Link>LinuxOnly.cs</Link>
+    </Compile>
+  </ItemGroup>
 </Project>
