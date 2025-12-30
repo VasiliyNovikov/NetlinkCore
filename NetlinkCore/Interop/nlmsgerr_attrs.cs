@@ -1,0 +1,10 @@
+namespace NetlinkCore.Interop;
+
+internal enum nlmsgerr_attrs
+{
+    NLMSGERR_ATTR_UNUSED,
+    NLMSGERR_ATTR_MSG,
+    NLMSGERR_ATTR_OFFS,
+    NLMSGERR_ATTR_COOKIE,
+    NLMSGERR_ATTR_POLICY
+}

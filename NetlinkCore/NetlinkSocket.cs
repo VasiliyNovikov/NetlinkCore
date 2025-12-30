@@ -8,13 +8,14 @@ namespace NetlinkCore;
 
 public abstract class NetlinkSocket : LinuxSocketBase
 {
-    protected NetlinkSocket(int protocol) : base(LinuxAddressFamily.Netlink, LinuxSocketType.Raw, (ProtocolType)protocol)
-    {
-        SetOption(LibC.NETLINK_CAP_ACK, 1);
-        SetOption(LibC.NETLINK_EXT_ACK, 1);
-        SetOption(LibC.NETLINK_GET_STRICT_CHK, 1);
+    public uint PortId { get; }
 
-        var address = new LibC.sockaddr_nl
+    protected NetlinkSocket(NetlinkFamily family) : base(LinuxAddressFamily.Netlink, LinuxSocketType.Raw, (ProtocolType)family)
+    {
+        SetOption(Constants.NETLINK_CAP_ACK, 1);
+        SetOption(Constants.NETLINK_EXT_ACK, 1);
+        SetOption(Constants.NETLINK_GET_STRICT_CHK, 1);
+        var address = new sockaddr_nl
         {
             nl_family = (ushort)LinuxAddressFamily.Netlink,
             nl_pad = 0,
@@ -22,6 +23,9 @@ public abstract class NetlinkSocket : LinuxSocketBase
             nl_groups = 0
         };
         Bind(address);
+        Connect(address);
+        GetAddress(out address);
+        PortId = address.nl_pid;
     }
 
     private void SetOption(int option, int value) => base.SetOption(LinuxSocketOptionLevel.Netlink, option, value);

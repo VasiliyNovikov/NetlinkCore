@@ -9,6 +9,6 @@ public class NetlinkSocketTests
     public void RouteNetlinkSocket_Create()
     {
         using var socket = new RouteNetlinkSocket();
-        Assert.IsNotNull(socket);
+        Assert.AreNotEqual(0u, socket.PortId);
     }
 }

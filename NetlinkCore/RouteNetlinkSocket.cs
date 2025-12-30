@@ -1,5 +1,3 @@
-using NetlinkCore.Interop;
-
 namespace NetlinkCore;
 
-public sealed class RouteNetlinkSocket() : NetlinkSocket(LibC.NETLINK_ROUTE);
+public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route);
