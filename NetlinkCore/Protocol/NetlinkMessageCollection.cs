@@ -40,6 +40,9 @@ internal readonly unsafe ref struct NetlinkMessageCollection(ReadOnlySpan<byte> 
                     : throw new NetlinkException(error);
             }
 
+            if (type == NetlinkMessageType.Done)
+                return false;
+
             Current = new(type, subtype, flags, payload);
             return true;
         }
