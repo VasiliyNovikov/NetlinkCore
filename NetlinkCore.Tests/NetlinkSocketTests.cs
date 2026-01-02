@@ -1,3 +1,5 @@
+using System.Linq;
+
 using LinuxCore;
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -25,6 +27,18 @@ public class NetlinkSocketTests
         Assert.AreEqual("lo", link.Name);
         Assert.IsGreaterThan(0, link.IfIndex);
         Assert.AreEqual(default(MACAddress), link.MacAddress);
+    }
+
+    [TestMethod]
+    public void RouteNetlinkSocket_GetLinks()
+    {
+        using var socket = new RouteNetlinkSocket();
+        var links = socket.GetLinks();
+        Assert.IsGreaterThan(1, links.Length);
+        var lo = links.Single(l => l.Name == "lo");
+        Assert.AreEqual("lo", lo.Name);
+        Assert.IsGreaterThan(0, lo.IfIndex);
+        Assert.AreEqual(default(MACAddress), lo.MacAddress);
     }
 
     [TestMethod]
