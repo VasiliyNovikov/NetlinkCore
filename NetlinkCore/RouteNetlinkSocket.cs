@@ -27,9 +27,10 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         foreach (var message in new RouteNetlinkMessageCollection<ifinfomsg, ifinfomsg_type, ifinfomsg_attrs>(received))
         {
             var ifIndex = message.Header.ifi_index;
-            MACAddress macAddress = default;
+            MACAddress? macAddress = null;
             foreach (var attribute in message.Attributes)
             {
+                Console.Error.WriteLine($"Attribute: {attribute.Name}, Length: {attribute.Data.Length}");
                 switch (attribute.Name)
                 {
                     case ifinfomsg_attrs.IFLA_IFNAME:
