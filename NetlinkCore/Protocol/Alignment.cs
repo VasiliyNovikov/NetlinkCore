@@ -2,5 +2,5 @@ namespace NetlinkCore.Protocol;
 
 internal static class Alignment
 {
-    public static int Align(int length) => (length + 3) & ~3;
+    public static uint Align(uint length) => (length + 3u) & ~3u;
 }

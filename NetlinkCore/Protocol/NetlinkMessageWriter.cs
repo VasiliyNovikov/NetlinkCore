@@ -1,4 +1,6 @@
 using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 using NetlinkCore.Interop;
 
@@ -24,15 +26,12 @@ internal readonly ref struct NetlinkMessageWriter
 
     public SpanWriter PayloadWriter { get; }
 
+    public ReadOnlySpan<byte> Written => PayloadWriter.Written;
+
     public NetlinkMessageWriter(Span<byte> buffer)
     {
-        var tmpWriter = new SpanWriter(buffer);
-        _header = ref tmpWriter.Skip<nlmsghdr>();
-        _header.nlmsg_len = 0;
-        _header.nlmsg_seq = 0;
-        _header.nlmsg_type = 0;
-        _header.nlmsg_flags = 0;
-        _header.nlmsg_pid = 0;
+        _header = ref Unsafe.As<byte, nlmsghdr>(ref MemoryMarshal.GetReference(buffer));
+        _header = default;
         PayloadWriter = new SpanWriter(buffer, ref _header.nlmsg_len);
         PayloadWriter.Skip<nlmsghdr>();
     }

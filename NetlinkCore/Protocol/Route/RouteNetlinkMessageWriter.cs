@@ -26,9 +26,15 @@ internal readonly ref struct RouteNetlinkMessageWriter<THeader, TMsgType, TAttr>
 
     public ref uint PortId => ref _writer.PortId;
 
+    public NetlinkAttributeWriter<TAttr> Attributes { get; }
+
+    public ReadOnlySpan<byte> Written => _writer.PayloadWriter.Written;
+
     public RouteNetlinkMessageWriter(Span<byte> buffer)
     {
         _writer = new NetlinkMessageWriter(buffer);
-        _header = ref _writer.PayloadWriter.Skip<THeader>();
+        var payloadWriter = _writer.PayloadWriter;
+        _header = ref payloadWriter.Skip<THeader>();
+        Attributes = new NetlinkAttributeWriter<TAttr>(payloadWriter);
     }
 }

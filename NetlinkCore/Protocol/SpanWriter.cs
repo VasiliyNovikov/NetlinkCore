@@ -1,33 +1,29 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#pragma warning disable CS9084 // Struct member returns 'this' or other instance members by reference
 
 namespace NetlinkCore.Protocol;
 
-internal unsafe ref struct SpanWriter
+internal readonly unsafe ref struct SpanWriter
 {
     private readonly Span<byte> _buffer;
-    private readonly ref uint _externalLength;
-    private int _position = 0;
+    private readonly ref uint _length;
 
-    public readonly ReadOnlySpan<byte> Written => _buffer[.._position];
+    public ref readonly uint Length => ref _length;
 
-    public SpanWriter(Span<byte> buffer, ref uint externalLength)
+    public ReadOnlySpan<byte> Written => _buffer[..(int)_length];
+
+    public SpanWriter(Span<byte> buffer, ref uint length)
     {
         _buffer = buffer;
-        _externalLength = ref externalLength;
-    }
-
-    public SpanWriter(Span<byte> buffer) : this(buffer, ref Unsafe.NullRef<uint>())
-    {
+        _length = ref length;
     }
 
     public Span<byte> Skip(int length)
     {
-        var slice = _buffer.Slice(_position, length);
-        _position += Alignment.Align(length);
-        if (!Unsafe.IsNullRef(ref _externalLength))
-            _externalLength += (uint)length;
+        var slice = _buffer.Slice((int)_length, length);
+        _length += Alignment.Align((uint)length);
         return slice;
     }
 
