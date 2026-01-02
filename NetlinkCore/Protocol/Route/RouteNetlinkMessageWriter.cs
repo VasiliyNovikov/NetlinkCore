@@ -3,7 +3,8 @@ using System.Runtime.CompilerServices;
 
 namespace NetlinkCore.Protocol.Route;
 
-internal readonly ref struct RouteNetlinkMessageWriter<THeader, TMsgType, TAttr> where THeader : unmanaged
+internal readonly ref struct RouteNetlinkMessageWriter<THeader, TMsgType, TAttr>
+    where THeader : unmanaged
     where TMsgType : unmanaged, Enum
     where TAttr : unmanaged, Enum
 {

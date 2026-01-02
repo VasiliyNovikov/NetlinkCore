@@ -14,18 +14,11 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     public Link GetLink(string name)
     {
         GetBuffer(out var buffer);
-        var messageWriter = new RouteNetlinkMessageWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(buffer)
-        {
-            Type = ifinfomsg_type.RTM_GETLINK,
-            Flags = NetlinkMessageFlags.Request,
-            PortId = PortId,
-            Header = default
-        };
-        messageWriter.Attributes.Write(IFLA_ATTRS.IFLA_IFNAME, name);
-        Send(messageWriter.Written);
-        var receivedLength = Receive(buffer);
-        var received = (ReadOnlySpan<byte>)buffer[..receivedLength];
-        foreach (var message in new RouteNetlinkMessageCollection<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(received))
+        var writer = GetWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(ref buffer);
+        writer.Type = ifinfomsg_type.RTM_GETLINK;
+        writer.Flags = NetlinkMessageFlags.Request;
+        writer.Attributes.Write(IFLA_ATTRS.IFLA_IFNAME, name);
+        foreach (var message in Get(ref buffer, writer))
             if (message.Type == ifinfomsg_type.RTM_NEWLINK)
                 return ParseLink(message);
         throw new InvalidOperationException($"Link with name '{name}' not found.");
@@ -34,18 +27,11 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     public Link[] GetLinks()
     {
         GetBuffer(out var buffer);
-        var messageWriter = new RouteNetlinkMessageWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(buffer)
-        {
-            Type = ifinfomsg_type.RTM_GETLINK,
-            Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Dump,
-            PortId = PortId,
-            Header = default
-        };
-        Send(messageWriter.Written);
-        var receivedLength = Receive(buffer);
-        var received = (ReadOnlySpan<byte>)buffer[..receivedLength];
+        var writer = GetWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(ref buffer);
+        writer.Type = ifinfomsg_type.RTM_GETLINK;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Dump;
         var links = new List<Link>();
-        foreach (var message in new RouteNetlinkMessageCollection<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(received))
+        foreach (var message in Get(ref buffer, writer))
             if (message.Type == ifinfomsg_type.RTM_NEWLINK)
                 links.Add(ParseLink(message));
         return [.. links];
@@ -54,32 +40,21 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     public void DeleteLink(string name)
     {
         GetBuffer(out var buffer);
-        var messageWriter = new RouteNetlinkMessageWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(buffer)
-        {
-            Type = ifinfomsg_type.RTM_DELLINK,
-            Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Ack,
-            PortId = PortId,
-            Header = default
-        };
-        messageWriter.Attributes.Write(IFLA_ATTRS.IFLA_IFNAME, name);
-        Send(messageWriter.Written);
-        var receivedLength = Receive(buffer);
-        var received = (ReadOnlySpan<byte>)buffer[..receivedLength];
-        foreach (var _ in new RouteNetlinkMessageCollection<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(received)) ;
+        var writer = GetWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(ref buffer);
+        writer.Type = ifinfomsg_type.RTM_DELLINK;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Ack;
+        writer.Attributes.Write(IFLA_ATTRS.IFLA_IFNAME, name);
+        Post(ref buffer, writer);
     }
 
     public void CreateVEth(string name, string peerName)
     {
         GetBuffer(out var buffer);
-        var messageWriter = new RouteNetlinkMessageWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(buffer)
-        {
-            Type = ifinfomsg_type.RTM_NEWLINK,
-            Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Exclusive | NetlinkMessageFlags.Ack,
-            PortId = PortId,
-            Header = default
-        };
-        messageWriter.Attributes.Write(IFLA_ATTRS.IFLA_IFNAME, name);
-        using (var infoAttrs = messageWriter.Attributes.WriteNested<IFLA_INFO_ATTRS>(IFLA_ATTRS.IFLA_LINKINFO))
+        var writer = GetWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(ref buffer);
+        writer.Type = ifinfomsg_type.RTM_NEWLINK;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Exclusive | NetlinkMessageFlags.Ack;
+        writer.Attributes.Write(IFLA_ATTRS.IFLA_IFNAME, name);
+        using (var infoAttrs = writer.Attributes.WriteNested<IFLA_INFO_ATTRS>(IFLA_ATTRS.IFLA_LINKINFO))
         {
             infoAttrs.Writer.Write(IFLA_INFO_ATTRS.IFLA_INFO_KIND, "veth");
             using var vethAttrs = infoAttrs.Writer.WriteNested<VETH_INFO_ATTRS>(IFLA_INFO_ATTRS.IFLA_INFO_DATA);
@@ -87,29 +62,20 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             peerAttrs.Header = default;
             peerAttrs.Writer.Write(IFLA_ATTRS.IFLA_IFNAME, peerName);
         }
-        Send(messageWriter.Written);
-        var receivedLength = Receive(buffer);
-        var received = (ReadOnlySpan<byte>)buffer[..receivedLength];
-        foreach (var _ in new RouteNetlinkMessageCollection<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(received)) ;
+        Post(ref buffer, writer);
     }
 
     public void CreateBridge(string name)
     {
         GetBuffer(out var buffer);
-        var messageWriter = new RouteNetlinkMessageWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(buffer)
-        {
-            Type = ifinfomsg_type.RTM_NEWLINK,
-            Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Exclusive | NetlinkMessageFlags.Ack,
-            PortId = PortId,
-            Header = default
-        };
-        messageWriter.Attributes.Write(IFLA_ATTRS.IFLA_IFNAME, name);
-        using (var infoAttrs = messageWriter.Attributes.WriteNested<IFLA_INFO_ATTRS>(IFLA_ATTRS.IFLA_LINKINFO))
+        var writer = GetWriter<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(ref buffer);
+        writer.Type = ifinfomsg_type.RTM_NEWLINK;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Exclusive | NetlinkMessageFlags.Ack;
+        writer.PortId = PortId;
+        writer.Attributes.Write(IFLA_ATTRS.IFLA_IFNAME, name);
+        using (var infoAttrs = writer.Attributes.WriteNested<IFLA_INFO_ATTRS>(IFLA_ATTRS.IFLA_LINKINFO))
             infoAttrs.Writer.Write(IFLA_INFO_ATTRS.IFLA_INFO_KIND, "bridge");
-        Send(messageWriter.Written);
-        var receivedLength = Receive(buffer);
-        var received = (ReadOnlySpan<byte>)buffer[..receivedLength];
-        foreach (var _ in new RouteNetlinkMessageCollection<ifinfomsg, ifinfomsg_type, IFLA_ATTRS>(received)) ;
+        Post(ref buffer, writer);
     }
 
     private static Link ParseLink(RouteNetlinkMessage<ifinfomsg, ifinfomsg_type, IFLA_ATTRS> message)
@@ -135,4 +101,35 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     }
 
     private static void GetBuffer(out NetlinkBuffer buffer) => Unsafe.SkipInit(out buffer);
+
+    private RouteNetlinkMessageWriter<THeader, TMsgType, TAttr> GetWriter<THeader, TMsgType, TAttr>(ref NetlinkBuffer buffer)
+        where THeader : unmanaged
+        where TMsgType : unmanaged, Enum
+        where TAttr : unmanaged, Enum
+    {
+        return new RouteNetlinkMessageWriter<THeader, TMsgType, TAttr>(buffer)
+        {
+            PortId = PortId,
+            Header = default
+        };
+    }
+
+    private RouteNetlinkMessageCollection<THeader, TMsgType, TAttr> Get<THeader, TMsgType, TAttr>(ref NetlinkBuffer buffer, RouteNetlinkMessageWriter<THeader, TMsgType, TAttr> message)
+        where THeader : unmanaged
+        where TMsgType : unmanaged, Enum
+        where TAttr : unmanaged, Enum
+    {
+        Send(message.Written);
+        var receivedLength = Receive(buffer);
+        var received = (ReadOnlySpan<byte>)buffer[..receivedLength];
+        return new RouteNetlinkMessageCollection<THeader, TMsgType, TAttr>(received);
+    }
+
+    private void Post<THeader, TMsgType, TAttr>(ref NetlinkBuffer buffer, RouteNetlinkMessageWriter<THeader, TMsgType, TAttr> message)
+        where THeader : unmanaged
+        where TMsgType : unmanaged, Enum
+        where TAttr : unmanaged, Enum
+    {
+        foreach (var _ in Get(ref buffer, message)) ;
+    }
 }
