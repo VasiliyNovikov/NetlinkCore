@@ -324,6 +324,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         var addressFamily = ToAddressFamily(message.Header.Family);
         IPAddress? destination = null;
         IPAddress? gateway = null;
+        int? inputInterfaceIndex = null;
         int? outputInterfaceIndex = null;
         uint? priority = null;
         IPAddress? preferredSource = null;
@@ -337,6 +338,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                     break;
                 case RouteAttributes.Gateway:
                     gateway = new IPAddress(attribute.Data);
+                    break;
+                case RouteAttributes.InputInterface:
+                    inputInterfaceIndex = attribute.AsValue<int>();
                     break;
                 case RouteAttributes.OutputInterface:
                     outputInterfaceIndex = attribute.AsValue<int>();
@@ -357,6 +361,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             destination,
             message.Header.DestinationLength,
             gateway,
+            inputInterfaceIndex,
             outputInterfaceIndex,
             priority,
             preferredSource,
@@ -375,16 +380,18 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Header.Scope = (byte)route.Scope;
         writer.Header.RouteType = (byte)route.Type;
 
-        if (route.Destination is not null)
-            WriteAddress(writer.Attributes, RouteAttributes.Destination, route.Destination);
-        if (route.Gateway is not null)
-            WriteAddress(writer.Attributes, RouteAttributes.Gateway, route.Gateway);
-        if (route.OutputInterfaceIndex is not null)
-            writer.Attributes.Write(RouteAttributes.OutputInterface, route.OutputInterfaceIndex.Value);
-        if (route.Priority is not null)
-            writer.Attributes.Write(RouteAttributes.Priority, route.Priority.Value);
-        if (route.PreferredSource is not null)
-            WriteAddress(writer.Attributes, RouteAttributes.PreferredSource, route.PreferredSource);
+        if (route.Destination is { } destination)
+            WriteAddress(writer.Attributes, RouteAttributes.Destination, destination);
+        if (route.Gateway is { } gateway)
+            WriteAddress(writer.Attributes, RouteAttributes.Gateway, gateway);
+        if (route.InputInterfaceIndex is { } inputInterfaceIndex)
+            writer.Attributes.Write(RouteAttributes.InputInterface, inputInterfaceIndex);
+        if (route.OutputInterfaceIndex is { } outputInterfaceIndex)
+            writer.Attributes.Write(RouteAttributes.OutputInterface, outputInterfaceIndex);
+        if (route.Priority is { } priority)
+            writer.Attributes.Write(RouteAttributes.Priority, priority);
+        if (route.PreferredSource is { } preferredSource)
+            WriteAddress(writer.Attributes, RouteAttributes.PreferredSource, preferredSource);
         if (route.Table > byte.MaxValue)
             writer.Attributes.Write(RouteAttributes.Table, route.Table);
     }

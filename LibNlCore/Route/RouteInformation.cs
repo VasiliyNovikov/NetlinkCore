@@ -7,6 +7,7 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                                      IPAddress? destination = null,
                                      byte destinationPrefixLength = 0,
                                      IPAddress? gateway = null,
+                                     int? inputInterfaceIndex = null,
                                      int? outputInterfaceIndex = null,
                                      uint? priority = null,
                                      IPAddress? preferredSource = null,
@@ -19,6 +20,7 @@ public sealed class RouteInformation(AddressFamily addressFamily,
     public IPAddress? Destination => destination;
     public byte DestinationPrefixLength => destinationPrefixLength;
     public IPAddress? Gateway => gateway;
+    public int? InputInterfaceIndex => inputInterfaceIndex;
     public int? OutputInterfaceIndex => outputInterfaceIndex;
     public uint? Priority => priority;
     public IPAddress? PreferredSource => preferredSource;
@@ -30,6 +32,7 @@ public sealed class RouteInformation(AddressFamily addressFamily,
     public RouteInformation(IPAddress destination,
                             byte destinationPrefixLength,
                             IPAddress? gateway = null,
+                            int? inputInterfaceIndex = null,
                             int? outputInterfaceIndex = null,
                             uint? priority = null,
                             IPAddress? preferredSource = null,
@@ -37,12 +40,12 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                             RouteProtocol protocol = RouteProtocol.Static,
                             RouteScope scope = RouteScope.Universe,
                             RouteType type = RouteType.Unicast)
-        : this(destination.AddressFamily, destination, destinationPrefixLength, gateway, outputInterfaceIndex, priority, preferredSource, table, protocol, scope, type)
+        : this(destination.AddressFamily, destination, destinationPrefixLength, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, protocol, scope, type)
     {
     }
 
     public RouteInformation WithOutputInterfaceIndex(int? outputInterfaceIndex)
     {
-        return new RouteInformation(AddressFamily, Destination, DestinationPrefixLength, Gateway, outputInterfaceIndex, Priority, PreferredSource, Table, Protocol, Scope, Type);
+        return new RouteInformation(AddressFamily, Destination, DestinationPrefixLength, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Protocol, Scope, Type);
     }
 }
