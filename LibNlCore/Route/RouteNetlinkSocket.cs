@@ -199,12 +199,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Type = RouteNetlinkMessageType.GetAddress;
         writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Dump;
         writer.Header.LinkIndex = (uint)linkIndex;
-        writer.Header.Family = addressFamily switch
-        {
-            AddressFamily.InterNetwork => LinuxAddressFamily.Inet,
-            AddressFamily.InterNetworkV6 => LinuxAddressFamily.Inet6,
-            _ => throw new ArgumentException($"Unsupported address family: {addressFamily}", nameof(addressFamily))
-        };
+        writer.Header.Family = ToLinuxAddressFamily(addressFamily);
         var addresses = new List<LinkAddress>();
         foreach (var message in Get(buffer, writer))
             if (message.Type == RouteNetlinkMessageType.NewAddress)
@@ -253,8 +248,8 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     {
         writer.Header.LinkIndex = (uint)linkIndex;
         writer.Header.PrefixLength = address.PrefixLength;
-        writer.Header.Family = address.AddressFamily == AddressFamily.InterNetwork ? LinuxAddressFamily.Inet : LinuxAddressFamily.Inet6;
-        var size = address.AddressFamily == AddressFamily.InterNetwork ? 4 : 16;
+        writer.Header.Family = ToLinuxAddressFamily(address.AddressFamily);
+        var size = GetAddressSize(address.AddressFamily);
         var localBytes = writer.Attributes.PrepareWrite(RouteAddressAttributes.Local, size);
         address.Address.TryWriteBytes(localBytes, out _);
         var addressBytes = writer.Attributes.PrepareWrite(RouteAddressAttributes.Address, size);
@@ -380,24 +375,23 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Header.Scope = (byte)route.Scope;
         writer.Header.RouteType = (byte)route.Type;
 
-        var size = GetAddressSize(route.AddressFamily);
         if (route.Destination is not null)
-            WriteAddress(writer.Attributes, RouteAttributes.Destination, route.Destination, size);
+            WriteAddress(writer.Attributes, RouteAttributes.Destination, route.Destination);
         if (route.Gateway is not null)
-            WriteAddress(writer.Attributes, RouteAttributes.Gateway, route.Gateway, size);
+            WriteAddress(writer.Attributes, RouteAttributes.Gateway, route.Gateway);
         if (route.OutputInterfaceIndex is not null)
             writer.Attributes.Write(RouteAttributes.OutputInterface, route.OutputInterfaceIndex.Value);
         if (route.Priority is not null)
             writer.Attributes.Write(RouteAttributes.Priority, route.Priority.Value);
         if (route.PreferredSource is not null)
-            WriteAddress(writer.Attributes, RouteAttributes.PreferredSource, route.PreferredSource, size);
+            WriteAddress(writer.Attributes, RouteAttributes.PreferredSource, route.PreferredSource);
         if (route.Table > byte.MaxValue)
             writer.Attributes.Write(RouteAttributes.Table, route.Table);
     }
 
-    private static void WriteAddress(NetlinkAttributeWriter<RouteAttributes> writer, RouteAttributes attribute, IPAddress address, int size)
+    private static void WriteAddress(NetlinkAttributeWriter<RouteAttributes> writer, RouteAttributes attribute, IPAddress address)
     {
-        var bytes = writer.PrepareWrite(attribute, size);
+        var bytes = writer.PrepareWrite(attribute, GetAddressSize(address.AddressFamily));
         address.TryWriteBytes(bytes, out _);
     }
 
@@ -427,7 +421,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         {
             LinuxAddressFamily.Inet => AddressFamily.InterNetwork,
             LinuxAddressFamily.Inet6 => AddressFamily.InterNetworkV6,
-            _ => throw new InvalidOperationException($"Unsupported route address family: {addressFamily}")
+            _ => throw new ArgumentException($"Unsupported address family: {addressFamily}", nameof(addressFamily))
         };
     }
 
