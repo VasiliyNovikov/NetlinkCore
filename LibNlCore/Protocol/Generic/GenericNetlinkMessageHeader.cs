@@ -8,5 +8,5 @@ internal struct GenericNetlinkMessageHeader
 {
     public byte Cmd;      // cmd
     public byte Version;  // version
-    private ushort Reserved;
+    private readonly ushort Reserved;
 }

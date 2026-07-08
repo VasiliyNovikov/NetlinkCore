@@ -17,6 +17,7 @@ public sealed class LinkCollection : IEnumerable<Link>, IDisposable
 
     public Link this[int index] => Create(_routeSocket.GetLink(index));
     public Link this[string name] => Create(_routeSocket.GetLink(name));
+    public RouteCollection Routes => field ??= new(_routeSocket);
 
     public LinkCollection(NetNs? ns = null)
     {

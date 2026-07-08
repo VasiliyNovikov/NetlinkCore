@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Net;
+using System.Net.Sockets;
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -150,5 +151,60 @@ public class LinkTests
         {
             Script.ExecNoThrow("ip", "link", "del", vethName);
         }
+    }
+
+    [TestMethod]
+    public void LinkRoutes_Add_Replace_Delete()
+    {
+        const string bridgeName = "test_rtbr0";
+        const uint table = 50003;
+        using var collection = new LinkCollection();
+        var route = new RouteInformation(
+            IPAddress.Parse("203.0.113.0"),
+            24,
+            priority: 100,
+            preferredSource: IPAddress.Parse("192.0.2.3"),
+            table: table,
+            scope: RouteScope.Link);
+        var replacement = new RouteInformation(
+            IPAddress.Parse("203.0.113.0"),
+            24,
+            priority: 100,
+            preferredSource: IPAddress.Parse("192.0.2.4"),
+            table: table,
+            scope: RouteScope.Link);
+
+        var bridge = collection.CreateBridge(bridgeName);
+        try
+        {
+            bridge.Up = true;
+            bridge.Addresses.Add(new LinkAddress(IPAddress.Parse("192.0.2.3"), 32));
+            bridge.Addresses.Add(new LinkAddress(IPAddress.Parse("192.0.2.4"), 32));
+            bridge.Routes.Add(route);
+
+            var routes = bridge.Routes.Get(AddressFamily.InterNetwork, table).Where(IsTestRoute).ToArray();
+            Assert.HasCount(1, routes);
+            Assert.AreEqual(bridge.Index, routes[0].OutputInterfaceIndex);
+            Assert.AreEqual(route.Priority, routes[0].Priority);
+            Assert.AreEqual(route.PreferredSource, routes[0].PreferredSource);
+            Assert.Contains($"203.0.113.0/24 dev {bridgeName}", Script.Exec("ip", "route", "show", "table", table.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+            bridge.Routes.Replace(replacement);
+            routes = collection.Routes.Get(AddressFamily.InterNetwork, table).Where(IsTestRoute).ToArray();
+            Assert.HasCount(1, routes);
+            Assert.AreEqual(bridge.Index, routes[0].OutputInterfaceIndex);
+            Assert.AreEqual(replacement.Priority, routes[0].Priority);
+            Assert.AreEqual(replacement.PreferredSource, routes[0].PreferredSource);
+
+            bridge.Routes.Remove(replacement);
+            Assert.IsEmpty(collection.Routes.Get(AddressFamily.InterNetwork, table).Where(IsTestRoute));
+        }
+        finally
+        {
+            Script.ExecNoThrow("ip", "route", "flush", "table", table.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            collection.Delete(bridge);
+        }
+
+        static bool IsTestRoute(RouteInformation route) => route.Destination?.Equals(IPAddress.Parse("203.0.113.0")) == true;
     }
 }

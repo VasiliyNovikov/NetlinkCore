@@ -268,6 +268,171 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
 
     #endregion
 
+    #region Routes
+
+    public RouteInformation[] GetRoutes(AddressFamily addressFamily = AddressFamily.Unspecified, uint? table = null, int? outputInterfaceIndex = null)
+    {
+        if (addressFamily == AddressFamily.Unspecified)
+            return [.. GetRoutes(AddressFamily.InterNetwork, table, outputInterfaceIndex), .. GetRoutes(AddressFamily.InterNetworkV6, table, outputInterfaceIndex)];
+
+        using var buffer = new NetlinkBuffer(NetlinkBufferSize.Large);
+        var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
+        writer.Type = RouteNetlinkMessageType.GetRoute;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Dump;
+        writer.Header.Family = ToLinuxAddressFamily(addressFamily);
+        var routes = new List<RouteInformation>();
+        foreach (var message in Get(buffer, writer))
+            if (message.Type == RouteNetlinkMessageType.NewRoute)
+            {
+                var route = ParseRoute(message);
+                if (table is not null && route.Table != table.Value)
+                    continue;
+                if (outputInterfaceIndex is not null && route.OutputInterfaceIndex != outputInterfaceIndex.Value)
+                    continue;
+                routes.Add(route);
+            }
+        return [.. routes];
+    }
+
+    public void AddRoute(RouteInformation route)
+    {
+        using var buffer = new NetlinkBuffer(NetlinkBufferSize.Small);
+        var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
+        writer.Type = RouteNetlinkMessageType.NewRoute;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Exclusive | NetlinkMessageFlags.Ack;
+        WriteRoute(writer, route);
+        Post(buffer, writer);
+    }
+
+    public void ReplaceRoute(RouteInformation route)
+    {
+        using var buffer = new NetlinkBuffer(NetlinkBufferSize.Small);
+        var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
+        writer.Type = RouteNetlinkMessageType.NewRoute;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Replace | NetlinkMessageFlags.Ack;
+        WriteRoute(writer, route);
+        Post(buffer, writer);
+    }
+
+    public void DeleteRoute(RouteInformation route)
+    {
+        using var buffer = new NetlinkBuffer(NetlinkBufferSize.Small);
+        var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
+        writer.Type = RouteNetlinkMessageType.DeleteRoute;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Ack;
+        WriteRoute(writer, route);
+        Post(buffer, writer);
+    }
+
+    private static RouteInformation ParseRoute(RouteNetlinkMessage<RouteMessage, RouteAttributes> message)
+    {
+        var addressFamily = ToAddressFamily(message.Header.Family);
+        IPAddress? destination = null;
+        IPAddress? gateway = null;
+        int? outputInterfaceIndex = null;
+        uint? priority = null;
+        IPAddress? preferredSource = null;
+        var table = (uint)message.Header.Table;
+        foreach (var attribute in message.Attributes)
+        {
+            switch (attribute.Name)
+            {
+                case RouteAttributes.Destination:
+                    destination = new IPAddress(attribute.Data);
+                    break;
+                case RouteAttributes.Gateway:
+                    gateway = new IPAddress(attribute.Data);
+                    break;
+                case RouteAttributes.OutputInterface:
+                    outputInterfaceIndex = attribute.AsValue<int>();
+                    break;
+                case RouteAttributes.Priority:
+                    priority = attribute.AsValue<uint>();
+                    break;
+                case RouteAttributes.PreferredSource:
+                    preferredSource = new IPAddress(attribute.Data);
+                    break;
+                case RouteAttributes.Table:
+                    table = attribute.AsValue<uint>();
+                    break;
+            }
+        }
+        return new RouteInformation(
+            addressFamily,
+            destination,
+            message.Header.DestinationLength,
+            gateway,
+            outputInterfaceIndex,
+            priority,
+            preferredSource,
+            table,
+            (RouteProtocol)message.Header.Protocol,
+            (RouteScope)message.Header.Scope,
+            (RouteType)message.Header.RouteType);
+    }
+
+    private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route)
+    {
+        writer.Header.Family = ToLinuxAddressFamily(route.AddressFamily);
+        writer.Header.DestinationLength = route.DestinationPrefixLength;
+        writer.Header.Table = route.Table <= byte.MaxValue ? (byte)route.Table : (byte)RouteTable.Unspecified;
+        writer.Header.Protocol = (byte)route.Protocol;
+        writer.Header.Scope = (byte)route.Scope;
+        writer.Header.RouteType = (byte)route.Type;
+
+        var size = GetAddressSize(route.AddressFamily);
+        if (route.Destination is not null)
+            WriteAddress(writer.Attributes, RouteAttributes.Destination, route.Destination, size);
+        if (route.Gateway is not null)
+            WriteAddress(writer.Attributes, RouteAttributes.Gateway, route.Gateway, size);
+        if (route.OutputInterfaceIndex is not null)
+            writer.Attributes.Write(RouteAttributes.OutputInterface, route.OutputInterfaceIndex.Value);
+        if (route.Priority is not null)
+            writer.Attributes.Write(RouteAttributes.Priority, route.Priority.Value);
+        if (route.PreferredSource is not null)
+            WriteAddress(writer.Attributes, RouteAttributes.PreferredSource, route.PreferredSource, size);
+        if (route.Table > byte.MaxValue)
+            writer.Attributes.Write(RouteAttributes.Table, route.Table);
+    }
+
+    private static void WriteAddress(NetlinkAttributeWriter<RouteAttributes> writer, RouteAttributes attribute, IPAddress address, int size)
+    {
+        var bytes = writer.PrepareWrite(attribute, size);
+        address.TryWriteBytes(bytes, out _);
+    }
+
+    private static int GetAddressSize(AddressFamily addressFamily)
+    {
+        return addressFamily switch
+        {
+            AddressFamily.InterNetwork => 4,
+            AddressFamily.InterNetworkV6 => 16,
+            _ => throw new ArgumentException($"Unsupported address family: {addressFamily}", nameof(addressFamily))
+        };
+    }
+
+    private static LinuxAddressFamily ToLinuxAddressFamily(AddressFamily addressFamily)
+    {
+        return addressFamily switch
+        {
+            AddressFamily.InterNetwork => LinuxAddressFamily.Inet,
+            AddressFamily.InterNetworkV6 => LinuxAddressFamily.Inet6,
+            _ => throw new ArgumentException($"Unsupported address family: {addressFamily}", nameof(addressFamily))
+        };
+    }
+
+    private static AddressFamily ToAddressFamily(LinuxAddressFamily addressFamily)
+    {
+        return addressFamily switch
+        {
+            LinuxAddressFamily.Inet => AddressFamily.InterNetwork,
+            LinuxAddressFamily.Inet6 => AddressFamily.InterNetworkV6,
+            _ => throw new InvalidOperationException($"Unsupported route address family: {addressFamily}")
+        };
+    }
+
+    #endregion
+
     private RouteNetlinkMessageWriter<THeader, TAttr> GetWriter<THeader, TAttr>(Span<byte> buffer)
         where THeader : unmanaged
         where TAttr : unmanaged, Enum
