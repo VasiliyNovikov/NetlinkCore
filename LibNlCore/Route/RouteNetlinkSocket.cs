@@ -373,7 +373,8 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                                     table,
                                     (RouteProtocol)message.Header.Protocol,
                                     (RouteScope)message.Header.Scope,
-                                    (RouteType)message.Header.RouteType);
+                                    (RouteType)message.Header.RouteType,
+                                    message.Header.TypeOfService);
     }
 
     private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route)
@@ -385,6 +386,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Header.Protocol = (byte)route.Protocol;
         writer.Header.Scope = (byte)route.Scope;
         writer.Header.RouteType = (byte)route.Type;
+        writer.Header.TypeOfService = route.TypeOfService;
 
         if (route.Source is { } source)
             WriteAddress(writer.Attributes, RouteAttributes.Source, source);

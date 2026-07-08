@@ -16,7 +16,8 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                                      uint table = RouteTable.Main,
                                      RouteProtocol protocol = RouteProtocol.Static,
                                      RouteScope scope = RouteScope.Universe,
-                                     RouteType type = RouteType.Unicast)
+                                     RouteType type = RouteType.Unicast,
+                                     byte typeOfService = 0)
 {
     public AddressFamily AddressFamily => addressFamily;
     public IPAddress? Source => source;
@@ -32,6 +33,7 @@ public sealed class RouteInformation(AddressFamily addressFamily,
     public RouteProtocol Protocol => protocol;
     public RouteScope Scope => scope;
     public RouteType Type => type;
+    public byte TypeOfService => typeOfService;
 
     public RouteInformation(IPAddress destination,
                             byte destinationPrefixLength,
@@ -45,13 +47,14 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                             uint table = RouteTable.Main,
                             RouteProtocol protocol = RouteProtocol.Static,
                             RouteScope scope = RouteScope.Universe,
-                            RouteType type = RouteType.Unicast)
-        : this(destination.AddressFamily, source, sourcePrefixLength, destination, destinationPrefixLength, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, protocol, scope, type)
+                            RouteType type = RouteType.Unicast,
+                            byte typeOfService = 0)
+        : this(destination.AddressFamily, source, sourcePrefixLength, destination, destinationPrefixLength, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, protocol, scope, type, typeOfService)
     {
     }
 
     public RouteInformation WithOutputInterfaceIndex(int? outputInterfaceIndex)
     {
-        return new RouteInformation(AddressFamily, Source, SourcePrefixLength, Destination, DestinationPrefixLength, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Protocol, Scope, Type);
+        return new RouteInformation(AddressFamily, Source, SourcePrefixLength, Destination, DestinationPrefixLength, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Protocol, Scope, Type, TypeOfService);
     }
 }
