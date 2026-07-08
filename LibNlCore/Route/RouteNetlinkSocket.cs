@@ -362,6 +362,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         }
         return new RouteInformation(addressFamily,
                                     source,
+                                    message.Header.SourceLength,
                                     destination,
                                     message.Header.DestinationLength,
                                     gateway,
@@ -378,6 +379,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route)
     {
         writer.Header.Family = ToLinuxAddressFamily(route.AddressFamily);
+        writer.Header.SourceLength = route.SourcePrefixLength;
         writer.Header.DestinationLength = route.DestinationPrefixLength;
         writer.Header.Table = route.Table <= byte.MaxValue ? (byte)route.Table : (byte)RouteTable.Unspecified;
         writer.Header.Protocol = (byte)route.Protocol;
