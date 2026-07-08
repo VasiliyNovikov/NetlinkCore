@@ -322,6 +322,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     private static RouteInformation ParseRoute(RouteNetlinkMessage<RouteMessage, RouteAttributes> message)
     {
         var addressFamily = ToAddressFamily(message.Header.Family);
+        IPAddress? source = null;
         IPAddress? destination = null;
         IPAddress? gateway = null;
         int? inputInterfaceIndex = null;
@@ -333,6 +334,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         {
             switch (attribute.Name)
             {
+                case RouteAttributes.Source:
+                    source = new IPAddress(attribute.Data);
+                    break;
                 case RouteAttributes.Destination:
                     destination = new IPAddress(attribute.Data);
                     break;
@@ -356,19 +360,19 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                     break;
             }
         }
-        return new RouteInformation(
-            addressFamily,
-            destination,
-            message.Header.DestinationLength,
-            gateway,
-            inputInterfaceIndex,
-            outputInterfaceIndex,
-            priority,
-            preferredSource,
-            table,
-            (RouteProtocol)message.Header.Protocol,
-            (RouteScope)message.Header.Scope,
-            (RouteType)message.Header.RouteType);
+        return new RouteInformation(addressFamily,
+                                    source,
+                                    destination,
+                                    message.Header.DestinationLength,
+                                    gateway,
+                                    inputInterfaceIndex,
+                                    outputInterfaceIndex,
+                                    priority,
+                                    preferredSource,
+                                    table,
+                                    (RouteProtocol)message.Header.Protocol,
+                                    (RouteScope)message.Header.Scope,
+                                    (RouteType)message.Header.RouteType);
     }
 
     private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route)
@@ -380,6 +384,8 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Header.Scope = (byte)route.Scope;
         writer.Header.RouteType = (byte)route.Type;
 
+        if (route.Source is { } source)
+            WriteAddress(writer.Attributes, RouteAttributes.Source, source);
         if (route.Destination is { } destination)
             WriteAddress(writer.Attributes, RouteAttributes.Destination, destination);
         if (route.Gateway is { } gateway)
