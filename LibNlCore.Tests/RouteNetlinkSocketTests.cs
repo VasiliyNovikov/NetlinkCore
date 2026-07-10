@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -295,7 +296,7 @@ public class RouteNetlinkSocketTests
 
                     Assert.HasCount(1, routes);
                     AssertRoute(route, routes[0]);
-                    Assert.Contains($"198.51.100.0/24 dev {name}", Script.Exec("ip", "route", "show", "table", table.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                    Assert.Contains($"198.51.100.0/24 dev {name}", Script.Exec("ip", "route", "show", "table", table.ToString(CultureInfo.InvariantCulture)));
 
                     socket.ReplaceRoute(replacement);
                     routes = socket.GetRoutes(AddressFamily.InterNetwork, table).Where(IsTestRoute).ToArray();
@@ -308,7 +309,7 @@ public class RouteNetlinkSocketTests
                 }
                 finally
                 {
-                    Script.ExecNoThrow("ip", "route", "flush", "table", table.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    Script.ExecNoThrow("ip", "route", "flush", "table", table.ToString(CultureInfo.InvariantCulture));
                     socket.DeleteLink(name);
                 }
             }
@@ -355,14 +356,14 @@ public class RouteNetlinkSocketTests
 
                     Assert.HasCount(1, routes);
                     AssertRoute(route, routes[0]);
-                    Assert.Contains($"2001:db8:1234::/64 dev {name}", Script.Exec("ip", "-6", "route", "show", "table", table.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                    Assert.Contains($"2001:db8:1234::/64 dev {name}", Script.Exec("ip", "-6", "route", "show", "table", table.ToString(CultureInfo.InvariantCulture)));
 
                     socket.DeleteRoute(route);
                     Assert.IsEmpty(socket.GetRoutes(AddressFamily.InterNetworkV6, table).Where(IsTestRoute));
                 }
                 finally
                 {
-                    Script.ExecNoThrow("ip", "-6", "route", "flush", "table", table.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    Script.ExecNoThrow("ip", "-6", "route", "flush", "table", table.ToString(CultureInfo.InvariantCulture));
                     socket.DeleteLink(name);
                 }
             }
@@ -375,6 +376,60 @@ public class RouteNetlinkSocketTests
         return;
 
         static bool IsTestRoute(RouteInformation route) => route.Destination == RouteAddress.Parse("2001:db8:1234::/64");
+    }
+
+    [TestMethod]
+    public void RouteNetlinkSocket_Add_Delete_IPv4_Route_Via_IPv6()
+    {
+        const string name = "brviatst";
+        const string nsName = "routeviatestns";
+        const uint table = 50004;
+        var gateway = IPAddress.Parse("2001:db8:1::1");
+        var route = new RouteInformation(RouteAddress.Parse("198.51.101.0/24"),
+                                         gateway: gateway,
+                                         priority: 100,
+                                         table: table);
+
+        NetNs.Create(nsName);
+        try
+        {
+            using var ns = NetNs.Open(nsName);
+            using (ns.Enter())
+            using (var socket = new RouteNetlinkSocket())
+            {
+                socket.CreateBridge(name);
+                try
+                {
+                    var link = socket.GetLink(name);
+                    socket.UpdateLink(link, link with { Up = true });
+                    socket.AddAddress(link.Index, LinkAddress.Parse("2001:db8:1::2/64"));
+                    route = route.WithOutputInterfaceIndex(link.Index);
+
+                    socket.AddRoute(route);
+                    var routes = socket.GetRoutes(AddressFamily.InterNetwork, table).Where(IsTestRoute).ToArray();
+
+                    Assert.HasCount(1, routes);
+                    AssertRoute(route, routes[0]);
+                    Assert.Contains($"198.51.101.0/24 via inet6 {gateway} dev {name}", Script.Exec("ip", "route", "show", "table", table.ToString(CultureInfo.InvariantCulture)));
+
+                    socket.DeleteRoute(route);
+                    Assert.IsEmpty(socket.GetRoutes(AddressFamily.InterNetwork, table).Where(IsTestRoute));
+                }
+                finally
+                {
+                    Script.ExecNoThrow("ip", "route", "flush", "table", table.ToString(CultureInfo.InvariantCulture));
+                    socket.DeleteLink(name);
+                }
+            }
+        }
+        finally
+        {
+            NetNs.Delete(nsName);
+        }
+
+        return;
+
+        static bool IsTestRoute(RouteInformation route) => route.Destination == RouteAddress.Parse("198.51.101.0/24");
     }
 
     private static void AssertRoute(RouteInformation expected, RouteInformation actual)

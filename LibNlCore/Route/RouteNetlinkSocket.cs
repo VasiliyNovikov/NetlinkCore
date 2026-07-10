@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 
 using LibNlCore.Protocol;
 using LibNlCore.Protocol.Route;
@@ -344,6 +345,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                 case RouteAttributes.Gateway:
                     gateway = new IPAddress(attribute.Data);
                     break;
+                case RouteAttributes.Via:
+                    gateway = new IPAddress(attribute.Data[sizeof(ushort)..]); // We just trust the kernel and skip the address family
+                    break;
                 case RouteAttributes.InputInterface:
                     inputInterfaceIndex = attribute.AsValue<int>();
                     break;
@@ -396,7 +400,14 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         if (route.Destination is { } destination)
             WriteAddress(writer.Attributes, RouteAttributes.Destination, destination.Address);
         if (route.Gateway is { } gateway)
-            WriteAddress(writer.Attributes, RouteAttributes.Gateway, gateway);
+            if (gateway.AddressFamily == route.AddressFamily)
+                WriteAddress(writer.Attributes, RouteAttributes.Gateway, gateway);
+            else
+            {
+                var data = writer.Attributes.PrepareWrite(RouteAttributes.Via, sizeof(ushort) + GetAddressSize(gateway.AddressFamily));
+                MemoryMarshal.Write(data, (ushort)ToLinuxAddressFamily(gateway.AddressFamily));
+                gateway.TryWriteBytes(data[sizeof(ushort)..], out _);
+            }
         if (route.InputInterfaceIndex is { } inputInterfaceIndex)
             writer.Attributes.Write(RouteAttributes.InputInterface, inputInterfaceIndex);
         if (route.OutputInterfaceIndex is { } outputInterfaceIndex)
@@ -413,8 +424,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
 
     private static void WriteAddress(NetlinkAttributeWriter<RouteAttributes> writer, RouteAttributes attribute, IPAddress address)
     {
-        var bytes = writer.PrepareWrite(attribute, GetAddressSize(address.AddressFamily));
-        address.TryWriteBytes(bytes, out _);
+        address.TryWriteBytes(writer.PrepareWrite(attribute, GetAddressSize(address.AddressFamily)), out _);
     }
 
     private static int GetAddressSize(AddressFamily addressFamily)
