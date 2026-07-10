@@ -4,10 +4,8 @@ using System.Net.Sockets;
 namespace LibNlCore.Route;
 
 public sealed class RouteInformation(AddressFamily addressFamily,
-                                     IPAddress? source = null,
-                                     byte sourcePrefixLength = 0,
-                                     IPAddress? destination = null,
-                                     byte destinationPrefixLength = 0,
+                                     RouteAddress? source = null,
+                                     RouteAddress? destination = null,
                                      IPAddress? gateway = null,
                                      int? inputInterfaceIndex = null,
                                      int? outputInterfaceIndex = null,
@@ -21,10 +19,8 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                                      byte typeOfService = 0)
 {
     public AddressFamily AddressFamily => addressFamily;
-    public IPAddress? Source => source;
-    public byte SourcePrefixLength => sourcePrefixLength;
-    public IPAddress? Destination => destination;
-    public byte DestinationPrefixLength => destinationPrefixLength;
+    public RouteAddress? Source => source;
+    public RouteAddress? Destination => destination;
     public IPAddress? Gateway => gateway;
     public int? InputInterfaceIndex => inputInterfaceIndex;
     public int? OutputInterfaceIndex => outputInterfaceIndex;
@@ -37,10 +33,8 @@ public sealed class RouteInformation(AddressFamily addressFamily,
     public RouteType Type => type;
     public byte TypeOfService => typeOfService;
 
-    public RouteInformation(IPAddress destination,
-                            byte destinationPrefixLength,
-                            IPAddress? source = null,
-                            byte sourcePrefixLength = 0,
+    public RouteInformation(RouteAddress destination,
+                            RouteAddress? source = null,
                             IPAddress? gateway = null,
                             int? inputInterfaceIndex = null,
                             int? outputInterfaceIndex = null,
@@ -52,12 +46,12 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                             RouteScope scope = RouteScope.Universe,
                             RouteType type = RouteType.Unicast,
                             byte typeOfService = 0)
-        : this(destination.AddressFamily, source, sourcePrefixLength, destination, destinationPrefixLength, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, preference, protocol, scope, type, typeOfService)
+        : this(destination.AddressFamily, source, destination, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, preference, protocol, scope, type, typeOfService)
     {
     }
 
     public RouteInformation WithOutputInterfaceIndex(int? outputInterfaceIndex)
     {
-        return new(AddressFamily, Source, SourcePrefixLength, Destination, DestinationPrefixLength, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Preference, Protocol, Scope, Type, TypeOfService);
+        return new(AddressFamily, Source, Destination, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Preference, Protocol, Scope, Type, TypeOfService);
     }
 }

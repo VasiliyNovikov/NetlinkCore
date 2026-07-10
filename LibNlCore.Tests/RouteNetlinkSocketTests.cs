@@ -259,22 +259,18 @@ public class RouteNetlinkSocketTests
         const string name = "brroute4tst";
         const string nsName = "route4testns";
         const uint table = 50001;
-        var route = new RouteInformation(
-            IPAddress.Parse("198.51.100.0"),
-            24,
-            outputInterfaceIndex: null,
-            priority: 100,
-            preferredSource: IPAddress.Parse("192.0.2.1"),
-            table: table,
-            scope: RouteScope.Link);
-        var replacement = new RouteInformation(
-            IPAddress.Parse("198.51.100.0"),
-            24,
-            outputInterfaceIndex: null,
-            priority: 100,
-            preferredSource: IPAddress.Parse("192.0.2.2"),
-            table: table,
-            scope: RouteScope.Link);
+        var route = new RouteInformation(RouteAddress.Parse("198.51.100.0/24"),
+                                         outputInterfaceIndex: null,
+                                         priority: 100,
+                                         preferredSource: IPAddress.Parse("192.0.2.1"),
+                                         table: table,
+                                         scope: RouteScope.Link);
+        var replacement = new RouteInformation(RouteAddress.Parse("198.51.100.0/24"),
+                                               outputInterfaceIndex: null,
+                                               priority: 100,
+                                               preferredSource: IPAddress.Parse("192.0.2.2"),
+                                               table: table,
+                                               scope: RouteScope.Link);
 
         NetNs.Create(nsName);
         try
@@ -322,7 +318,9 @@ public class RouteNetlinkSocketTests
             NetNs.Delete(nsName);
         }
 
-        static bool IsTestRoute(RouteInformation route) => route.Destination?.Equals(IPAddress.Parse("198.51.100.0")) == true;
+        return;
+
+        static bool IsTestRoute(RouteInformation route) => route.Destination == RouteAddress.Parse("198.51.100.0/24");
     }
 
     [TestMethod]
@@ -331,13 +329,11 @@ public class RouteNetlinkSocketTests
         const string name = "brroute6tst";
         const string nsName = "route6testns";
         const uint table = 50002;
-        var route = new RouteInformation(
-            IPAddress.Parse("2001:db8:1234::"),
-            64,
-            outputInterfaceIndex: null,
-            priority: 100,
-            table: table,
-            scope: RouteScope.Universe);
+        var route = new RouteInformation(RouteAddress.Parse("2001:db8:1234::/64"),
+                                         outputInterfaceIndex: null,
+                                         priority: 100,
+                                         table: table,
+                                         scope: RouteScope.Universe);
 
         NetNs.Create(nsName);
         try
@@ -376,15 +372,18 @@ public class RouteNetlinkSocketTests
             NetNs.Delete(nsName);
         }
 
-        static bool IsTestRoute(RouteInformation route) => route.Destination?.Equals(IPAddress.Parse("2001:db8:1234::")) == true;
+        return;
+
+        static bool IsTestRoute(RouteInformation route) => route.Destination == RouteAddress.Parse("2001:db8:1234::/64");
     }
 
     private static void AssertRoute(RouteInformation expected, RouteInformation actual)
     {
         Assert.AreEqual(expected.AddressFamily, actual.AddressFamily);
+        Assert.AreEqual(expected.Source, actual.Source);
         Assert.AreEqual(expected.Destination, actual.Destination);
-        Assert.AreEqual(expected.DestinationPrefixLength, actual.DestinationPrefixLength);
         Assert.AreEqual(expected.Gateway, actual.Gateway);
+        Assert.AreEqual(expected.InputInterfaceIndex, actual.InputInterfaceIndex);
         Assert.AreEqual(expected.OutputInterfaceIndex, actual.OutputInterfaceIndex);
         Assert.AreEqual(expected.Priority, actual.Priority);
         Assert.AreEqual(expected.PreferredSource, actual.PreferredSource);
@@ -392,5 +391,6 @@ public class RouteNetlinkSocketTests
         Assert.AreEqual(expected.Protocol, actual.Protocol);
         Assert.AreEqual(expected.Scope, actual.Scope);
         Assert.AreEqual(expected.Type, actual.Type);
+        Assert.AreEqual(expected.TypeOfService, actual.TypeOfService);
     }
 }

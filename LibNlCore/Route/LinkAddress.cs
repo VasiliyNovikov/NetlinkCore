@@ -1,40 +1,14 @@
-using System;
-using System.Globalization;
 using System.Net;
-using System.Net.Sockets;
 
 namespace LibNlCore.Route;
 
-public sealed class LinkAddress
+public sealed class LinkAddress(IPAddress address, byte prefixLength, bool noDad = false) : RouteAddress(address, prefixLength)
 {
-    public IPAddress Address { get; }
-    public byte PrefixLength { get; }
-    public bool NoDad { get; }
-    public AddressFamily AddressFamily => Address.AddressFamily;
+    public bool NoDad => noDad;
 
-    public LinkAddress(IPAddress address, byte prefixLength, bool noDad = false)
+    public new static LinkAddress Parse(string addressString)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(prefixLength);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(prefixLength, address.AddressFamily == AddressFamily.InterNetwork ? 32 : 128);
-        Address = address;
-        PrefixLength = prefixLength;
-        NoDad = noDad;
-    }
-    
-    public static LinkAddress Parse(string addressString)
-    {
-        var slashIndex = addressString.IndexOf('/');
-        if (slashIndex < 0)
-        {
-            var address = IPAddress.Parse(addressString);
-            var prefixLength = (byte)(address.AddressFamily == AddressFamily.InterNetwork ? 32 : 128);
-            return new(address, prefixLength);
-        }
-        else
-        {
-            var address = IPAddress.Parse(addressString.AsSpan(0, slashIndex));
-            var prefixLength = byte.Parse(addressString.AsSpan(slashIndex + 1), CultureInfo.InvariantCulture);
-            return new(address, prefixLength);
-        }
+        var (address, prefixLength) = ParseComponents(addressString);
+        return new(address, prefixLength, noDad: true);
     }
 }

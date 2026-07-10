@@ -159,20 +159,16 @@ public class LinkTests
         const string bridgeName = "test_rtbr0";
         const uint table = 50003;
         using var collection = new LinkCollection();
-        var route = new RouteInformation(
-            IPAddress.Parse("203.0.113.0"),
-            24,
-            priority: 100,
-            preferredSource: IPAddress.Parse("192.0.2.3"),
-            table: table,
-            scope: RouteScope.Link);
-        var replacement = new RouteInformation(
-            IPAddress.Parse("203.0.113.0"),
-            24,
-            priority: 100,
-            preferredSource: IPAddress.Parse("192.0.2.4"),
-            table: table,
-            scope: RouteScope.Link);
+        var route = new RouteInformation(RouteAddress.Parse("203.0.113.0/24"),
+                                         priority: 100,
+                                         preferredSource: IPAddress.Parse("192.0.2.3"),
+                                         table: table,
+                                         scope: RouteScope.Link);
+        var replacement = new RouteInformation(RouteAddress.Parse("203.0.113.0/24"),
+                                               priority: 100,
+                                               preferredSource: IPAddress.Parse("192.0.2.4"),
+                                               table: table,
+                                               scope: RouteScope.Link);
 
         var bridge = collection.CreateBridge(bridgeName);
         try
@@ -205,6 +201,8 @@ public class LinkTests
             collection.Delete(bridge);
         }
 
-        static bool IsTestRoute(RouteInformation route) => route.Destination?.Equals(IPAddress.Parse("203.0.113.0")) == true;
+        return;
+
+        static bool IsTestRoute(RouteInformation route) => route.Destination == RouteAddress.Parse("203.0.113.0/24");
     }
 }

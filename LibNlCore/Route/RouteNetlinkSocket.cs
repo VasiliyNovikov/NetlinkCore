@@ -322,8 +322,8 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     private static RouteInformation ParseRoute(RouteNetlinkMessage<RouteMessage, RouteAttributes> message)
     {
         var addressFamily = ToAddressFamily(message.Header.Family);
-        IPAddress? source = null;
-        IPAddress? destination = null;
+        RouteAddress? source = null;
+        RouteAddress? destination = null;
         IPAddress? gateway = null;
         int? inputInterfaceIndex = null;
         int? outputInterfaceIndex = null;
@@ -336,10 +336,10 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             switch (attribute.Name)
             {
                 case RouteAttributes.Source:
-                    source = new IPAddress(attribute.Data);
+                    source = new RouteAddress(new IPAddress(attribute.Data), message.Header.SourceLength);
                     break;
                 case RouteAttributes.Destination:
-                    destination = new IPAddress(attribute.Data);
+                    destination = new RouteAddress(new IPAddress(attribute.Data), message.Header.DestinationLength);
                     break;
                 case RouteAttributes.Gateway:
                     gateway = new IPAddress(attribute.Data);
@@ -366,9 +366,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         }
         return new RouteInformation(addressFamily,
                                     source,
-                                    message.Header.SourceLength,
                                     destination,
-                                    message.Header.DestinationLength,
                                     gateway,
                                     inputInterfaceIndex,
                                     outputInterfaceIndex,
@@ -385,8 +383,8 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route)
     {
         writer.Header.Family = ToLinuxAddressFamily(route.AddressFamily);
-        writer.Header.SourceLength = route.SourcePrefixLength;
-        writer.Header.DestinationLength = route.DestinationPrefixLength;
+        writer.Header.SourceLength = route.Source?.PrefixLength ?? 0;
+        writer.Header.DestinationLength = route.Destination?.PrefixLength ?? 0;
         writer.Header.Table = route.Table <= byte.MaxValue ? (byte)route.Table : (byte)RouteTable.Unspecified;
         writer.Header.Protocol = (byte)route.Protocol;
         writer.Header.Scope = (byte)route.Scope;
@@ -394,9 +392,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Header.TypeOfService = route.TypeOfService;
 
         if (route.Source is { } source)
-            WriteAddress(writer.Attributes, RouteAttributes.Source, source);
+            WriteAddress(writer.Attributes, RouteAttributes.Source, source.Address);
         if (route.Destination is { } destination)
-            WriteAddress(writer.Attributes, RouteAttributes.Destination, destination);
+            WriteAddress(writer.Attributes, RouteAttributes.Destination, destination.Address);
         if (route.Gateway is { } gateway)
             WriteAddress(writer.Attributes, RouteAttributes.Gateway, gateway);
         if (route.InputInterfaceIndex is { } inputInterfaceIndex)
