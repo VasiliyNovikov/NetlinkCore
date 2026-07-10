@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace LibNlCore.Route;
 
 [SuppressMessage("Style", "IDE0055:Fix formatting")]
-public enum RouteType
+public enum RouteType : byte
 {
     Unspecified =  0, // RTN_UNSPEC
     Unicast     =  1, // RTN_UNICAST

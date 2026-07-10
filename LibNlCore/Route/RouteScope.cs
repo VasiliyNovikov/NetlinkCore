@@ -3,7 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 namespace LibNlCore.Route;
 
 [SuppressMessage("Style", "IDE0055:Fix formatting")]
-public enum RouteScope
+public enum RouteScope : byte
 {
     Universe =   0, // RT_SCOPE_UNIVERSE
     Site     = 200, // RT_SCOPE_SITE

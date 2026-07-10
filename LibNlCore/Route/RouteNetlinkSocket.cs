@@ -374,9 +374,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                                     preferredSource,
                                     table,
                                     preference,
-                                    (RouteProtocol)message.Header.Protocol,
-                                    (RouteScope)message.Header.Scope,
-                                    (RouteType)message.Header.RouteType,
+                                    message.Header.Protocol,
+                                    message.Header.Scope,
+                                    message.Header.RouteType,
                                     message.Header.TypeOfService);
     }
 
@@ -386,9 +386,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Header.SourceLength = route.Source?.PrefixLength ?? 0;
         writer.Header.DestinationLength = route.Destination?.PrefixLength ?? 0;
         writer.Header.Table = route.Table <= byte.MaxValue ? (byte)route.Table : (byte)RouteTable.Unspecified;
-        writer.Header.Protocol = (byte)route.Protocol;
-        writer.Header.Scope = (byte)route.Scope;
-        writer.Header.RouteType = (byte)route.Type;
+        writer.Header.Protocol = route.Protocol;
+        writer.Header.Scope = route.Scope;
+        writer.Header.RouteType = route.Type;
         writer.Header.TypeOfService = route.TypeOfService;
 
         if (route.Source is { } source)
