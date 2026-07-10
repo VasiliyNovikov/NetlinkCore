@@ -168,8 +168,8 @@ public class LinkTests
         var replacement = new RouteInformation(RouteAddress.Parse("203.0.113.0/24"),
                                                priority: 100,
                                                preferredSource: IPAddress.Parse("192.0.2.4"),
-                                                table: table,
-                                                scope: RouteScope.Link);
+                                               table: table,
+                                               scope: RouteScope.Link);
 
         NetNs.Create(nsName);
         try
