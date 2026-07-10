@@ -14,6 +14,7 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                                      uint? priority = null,
                                      IPAddress? preferredSource = null,
                                      uint table = RouteTable.Main,
+                                     RoutePreference? preference = null,
                                      RouteProtocol protocol = RouteProtocol.Static,
                                      RouteScope scope = RouteScope.Universe,
                                      RouteType type = RouteType.Unicast,
@@ -30,6 +31,7 @@ public sealed class RouteInformation(AddressFamily addressFamily,
     public uint? Priority => priority;
     public IPAddress? PreferredSource => preferredSource;
     public uint Table => table;
+    public RoutePreference? Preference => preference;
     public RouteProtocol Protocol => protocol;
     public RouteScope Scope => scope;
     public RouteType Type => type;
@@ -45,16 +47,17 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                             uint? priority = null,
                             IPAddress? preferredSource = null,
                             uint table = RouteTable.Main,
+                            RoutePreference? preference = null,
                             RouteProtocol protocol = RouteProtocol.Static,
                             RouteScope scope = RouteScope.Universe,
                             RouteType type = RouteType.Unicast,
                             byte typeOfService = 0)
-        : this(destination.AddressFamily, source, sourcePrefixLength, destination, destinationPrefixLength, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, protocol, scope, type, typeOfService)
+        : this(destination.AddressFamily, source, sourcePrefixLength, destination, destinationPrefixLength, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, preference, protocol, scope, type, typeOfService)
     {
     }
 
     public RouteInformation WithOutputInterfaceIndex(int? outputInterfaceIndex)
     {
-        return new RouteInformation(AddressFamily, Source, SourcePrefixLength, Destination, DestinationPrefixLength, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Protocol, Scope, Type, TypeOfService);
+        return new(AddressFamily, Source, SourcePrefixLength, Destination, DestinationPrefixLength, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Preference, Protocol, Scope, Type, TypeOfService);
     }
 }

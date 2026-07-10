@@ -330,6 +330,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         uint? priority = null;
         IPAddress? preferredSource = null;
         var table = (uint)message.Header.Table;
+        RoutePreference? preference = null;
         foreach (var attribute in message.Attributes)
         {
             switch (attribute.Name)
@@ -358,6 +359,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                 case RouteAttributes.Table:
                     table = attribute.AsValue<uint>();
                     break;
+                case RouteAttributes.Preference:
+                    preference = attribute.AsValue<RoutePreference>();
+                    break;
             }
         }
         return new RouteInformation(addressFamily,
@@ -371,6 +375,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                                     priority,
                                     preferredSource,
                                     table,
+                                    preference,
                                     (RouteProtocol)message.Header.Protocol,
                                     (RouteScope)message.Header.Scope,
                                     (RouteType)message.Header.RouteType,
@@ -404,6 +409,8 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             WriteAddress(writer.Attributes, RouteAttributes.PreferredSource, preferredSource);
         if (route.Table > byte.MaxValue)
             writer.Attributes.Write(RouteAttributes.Table, route.Table);
+        if (route.Preference is { } preference)
+            writer.Attributes.Write(RouteAttributes.Preference, preference);
     }
 
     private static void WriteAddress(NetlinkAttributeWriter<RouteAttributes> writer, RouteAttributes attribute, IPAddress address)
