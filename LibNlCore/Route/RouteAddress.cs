@@ -15,7 +15,6 @@ public class RouteAddress : IEquatable<RouteAddress>, IEqualityOperators<RouteAd
     public RouteAddress(IPAddress address, byte prefixLength)
     {
         ArgumentNullException.ThrowIfNull(address);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(prefixLength);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(prefixLength, address.AddressFamily == AddressFamily.InterNetwork ? 32 : 128);
         Address = address;
         PrefixLength = prefixLength;
