@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 using System.Linq;
 using System.Net;
@@ -18,6 +19,24 @@ namespace LibNlCore.Tests;
 [TestClass]
 public class RouteNetlinkSocketTests
 {
+    [TestMethod]
+    public void RouteMetrics_TimeSpans()
+    {
+        var roundTripTime = TimeSpan.FromTicks(1_250);
+        var roundTripTimeVariance = TimeSpan.FromTicks(2_500);
+        var minimumRetransmissionTime = TimeSpan.FromMilliseconds(1);
+
+        Assert.AreEqual(1u, RouteMetrics.EncodeTimeSpan(roundTripTime, RouteMetrics.RoundTripTimeTicksPerUnit));
+        Assert.AreEqual(1u, RouteMetrics.EncodeTimeSpan(roundTripTimeVariance, RouteMetrics.RoundTripTimeVarianceTicksPerUnit));
+        Assert.AreEqual(1u, RouteMetrics.EncodeTimeSpan(minimumRetransmissionTime, RouteMetrics.MinimumRetransmissionTimeTicksPerUnit));
+        Assert.AreEqual(roundTripTime, RouteMetrics.DecodeTimeSpan(1, RouteMetrics.RoundTripTimeTicksPerUnit));
+        Assert.AreEqual(roundTripTimeVariance, RouteMetrics.DecodeTimeSpan(1, RouteMetrics.RoundTripTimeVarianceTicksPerUnit));
+        Assert.AreEqual(minimumRetransmissionTime, RouteMetrics.DecodeTimeSpan(1, RouteMetrics.MinimumRetransmissionTimeTicksPerUnit));
+
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RouteMetrics(roundTripTime: TimeSpan.FromTicks(-1_250)));
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new RouteMetrics(minimumRetransmissionTime: TimeSpan.FromTicks((uint.MaxValue + 1L) * TimeSpan.TicksPerMillisecond)));
+    }
+
     [TestMethod]
     public void RouteNetlinkSocket_Create()
     {
@@ -260,18 +279,37 @@ public class RouteNetlinkSocketTests
         const string name = "brroute4tst";
         const string nsName = "route4testns";
         const uint table = 50001;
+        var metrics = new RouteMetrics(locks: RouteMetricLocks.Mtu | RouteMetricLocks.MinimumRetransmissionTime | RouteMetricLocks.CongestionControlAlgorithm,
+                                       mtu: 1400,
+                                       window: 65535,
+                                       roundTripTime: TimeSpan.FromMilliseconds(100),
+                                       roundTripTimeVariance: TimeSpan.FromMilliseconds(50),
+                                       slowStartThreshold: 32,
+                                       congestionWindow: 16,
+                                       advertisedMss: 1300,
+                                       reordering: 4,
+                                       hopLimit: 64,
+                                       initialCongestionWindow: 12,
+                                       features: RouteMetricFeatures.Ecn,
+                                       minimumRetransmissionTime: TimeSpan.FromMilliseconds(200),
+                                       initialReceiveWindow: 24,
+                                       quickAck: 1,
+                                       congestionControlAlgorithm: "cubic",
+                                       fastOpenNoCookie: 1);
         var route = new RouteInformation(RouteAddress.Parse("198.51.100.0/24"),
                                          outputInterfaceIndex: null,
                                          priority: 100,
                                          preferredSource: IPAddress.Parse("192.0.2.1"),
                                          table: table,
-                                         scope: RouteScope.Link);
+                                         scope: RouteScope.Link,
+                                         metrics: metrics);
         var replacement = new RouteInformation(RouteAddress.Parse("198.51.100.0/24"),
                                                outputInterfaceIndex: null,
-                                               priority: 100,
-                                               preferredSource: IPAddress.Parse("192.0.2.2"),
-                                               table: table,
-                                               scope: RouteScope.Link);
+                                                priority: 100,
+                                                preferredSource: IPAddress.Parse("192.0.2.2"),
+                                                table: table,
+                                                scope: RouteScope.Link,
+                                                metrics: metrics);
 
         NetNs.Create(nsName);
         try
@@ -334,7 +372,8 @@ public class RouteNetlinkSocketTests
                                          outputInterfaceIndex: null,
                                          priority: 100,
                                          table: table,
-                                         scope: RouteScope.Universe);
+                                         scope: RouteScope.Universe,
+                                         metrics: new RouteMetrics(mtu: 1400));
 
         NetNs.Create(nsName);
         try
@@ -447,5 +486,34 @@ public class RouteNetlinkSocketTests
         Assert.AreEqual(expected.Scope, actual.Scope);
         Assert.AreEqual(expected.Type, actual.Type);
         Assert.AreEqual(expected.TypeOfService, actual.TypeOfService);
+        AssertRouteMetrics(expected.Metrics, actual.Metrics);
+    }
+
+    private static void AssertRouteMetrics(RouteMetrics? expected, RouteMetrics? actual)
+    {
+        if (expected is null)
+        {
+            Assert.IsNull(actual);
+            return;
+        }
+
+        Assert.IsNotNull(actual);
+        Assert.AreEqual(expected.Locks, actual.Locks);
+        Assert.AreEqual(expected.Mtu, actual.Mtu);
+        Assert.AreEqual(expected.Window, actual.Window);
+        Assert.AreEqual(expected.RoundTripTime, actual.RoundTripTime);
+        Assert.AreEqual(expected.RoundTripTimeVariance, actual.RoundTripTimeVariance);
+        Assert.AreEqual(expected.SlowStartThreshold, actual.SlowStartThreshold);
+        Assert.AreEqual(expected.CongestionWindow, actual.CongestionWindow);
+        Assert.AreEqual(expected.AdvertisedMss, actual.AdvertisedMss);
+        Assert.AreEqual(expected.Reordering, actual.Reordering);
+        Assert.AreEqual(expected.HopLimit, actual.HopLimit);
+        Assert.AreEqual(expected.InitialCongestionWindow, actual.InitialCongestionWindow);
+        Assert.AreEqual(expected.Features, actual.Features);
+        Assert.AreEqual(expected.MinimumRetransmissionTime, actual.MinimumRetransmissionTime);
+        Assert.AreEqual(expected.InitialReceiveWindow, actual.InitialReceiveWindow);
+        Assert.AreEqual(expected.QuickAck, actual.QuickAck);
+        Assert.AreEqual(expected.CongestionControlAlgorithm, actual.CongestionControlAlgorithm);
+        Assert.AreEqual(expected.FastOpenNoCookie, actual.FastOpenNoCookie);
     }
 }

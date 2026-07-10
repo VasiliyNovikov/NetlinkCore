@@ -332,6 +332,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         IPAddress? preferredSource = null;
         var table = (uint)message.Header.Table;
         RoutePreference? preference = null;
+        RouteMetrics? metrics = null;
         foreach (var attribute in message.Attributes)
         {
             switch (attribute.Name)
@@ -366,6 +367,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                 case RouteAttributes.Preference:
                     preference = attribute.AsValue<RoutePreference>();
                     break;
+                case RouteAttributes.Metrics:
+                    metrics = ParseRouteMetrics(attribute.AsNested<RouteMetricAttributes>());
+                    break;
             }
         }
         return new RouteInformation(addressFamily,
@@ -381,7 +385,8 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                                     message.Header.Protocol,
                                     message.Header.Scope,
                                     message.Header.RouteType,
-                                    message.Header.TypeOfService);
+                                    message.Header.TypeOfService,
+                                    metrics);
     }
 
     private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route)
@@ -420,6 +425,144 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             writer.Attributes.Write(RouteAttributes.Table, route.Table);
         if (route.Preference is { } preference)
             writer.Attributes.Write(RouteAttributes.Preference, preference);
+        if (route.Metrics is { IsEmpty: false } metrics)
+        {
+            using var metricAttributes = writer.Attributes.WriteNested<RouteMetricAttributes>(RouteAttributes.Metrics);
+            WriteRouteMetrics(metricAttributes.Writer, metrics);
+        }
+    }
+
+    private static RouteMetrics ParseRouteMetrics(NetlinkAttributeCollection<RouteMetricAttributes> attributes)
+    {
+        var locks = RouteMetricLocks.None;
+        uint? mtu = null;
+        uint? window = null;
+        TimeSpan? roundTripTime = null;
+        TimeSpan? roundTripTimeVariance = null;
+        uint? slowStartThreshold = null;
+        uint? congestionWindow = null;
+        uint? advertisedMss = null;
+        uint? reordering = null;
+        uint? hopLimit = null;
+        uint? initialCongestionWindow = null;
+        var features = RouteMetricFeatures.None;
+        TimeSpan? minimumRetransmissionTime = null;
+        uint? initialReceiveWindow = null;
+        uint? quickAck = null;
+        string? congestionControlAlgorithm = null;
+        uint? fastOpenNoCookie = null;
+
+        foreach (var attribute in attributes)
+            switch (attribute.Name)
+            {
+                case RouteMetricAttributes.Lock:
+                    locks = attribute.AsValue<RouteMetricLocks>();
+                    break;
+                case RouteMetricAttributes.Mtu:
+                    mtu = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.Window:
+                    window = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.RoundTripTime:
+                    roundTripTime = RouteMetrics.DecodeTimeSpan(attribute.AsValue<uint>(), RouteMetrics.RoundTripTimeTicksPerUnit);
+                    break;
+                case RouteMetricAttributes.RoundTripTimeVariance:
+                    roundTripTimeVariance = RouteMetrics.DecodeTimeSpan(attribute.AsValue<uint>(), RouteMetrics.RoundTripTimeVarianceTicksPerUnit);
+                    break;
+                case RouteMetricAttributes.SlowStartThreshold:
+                    slowStartThreshold = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.CongestionWindow:
+                    congestionWindow = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.AdvertisedMss:
+                    advertisedMss = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.Reordering:
+                    reordering = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.HopLimit:
+                    hopLimit = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.InitialCongestionWindow:
+                    initialCongestionWindow = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.Features:
+                    features = attribute.AsValue<RouteMetricFeatures>();
+                    break;
+                case RouteMetricAttributes.MinimumRetransmissionTime:
+                    minimumRetransmissionTime = RouteMetrics.DecodeTimeSpan(attribute.AsValue<uint>(), RouteMetrics.MinimumRetransmissionTimeTicksPerUnit);
+                    break;
+                case RouteMetricAttributes.InitialReceiveWindow:
+                    initialReceiveWindow = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.QuickAck:
+                    quickAck = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.CongestionControlAlgorithm:
+                    congestionControlAlgorithm = attribute.AsString();
+                    break;
+                case RouteMetricAttributes.FastOpenNoCookie:
+                    fastOpenNoCookie = attribute.AsValue<uint>();
+                    break;
+            }
+
+        return new RouteMetrics(locks,
+                                mtu,
+                                window,
+                                roundTripTime,
+                                roundTripTimeVariance,
+                                slowStartThreshold,
+                                congestionWindow,
+                                advertisedMss,
+                                reordering,
+                                hopLimit,
+                                initialCongestionWindow,
+                                features,
+                                minimumRetransmissionTime,
+                                initialReceiveWindow,
+                                quickAck,
+                                congestionControlAlgorithm,
+                                fastOpenNoCookie);
+    }
+
+    private static void WriteRouteMetrics(NetlinkAttributeWriter<RouteMetricAttributes> writer, RouteMetrics metrics)
+    {
+        if (metrics.Locks != RouteMetricLocks.None)
+            writer.Write(RouteMetricAttributes.Lock, metrics.Locks);
+        if (metrics.Mtu is { } mtu)
+            writer.Write(RouteMetricAttributes.Mtu, mtu);
+        if (metrics.Window is { } window)
+            writer.Write(RouteMetricAttributes.Window, window);
+        if (metrics.RoundTripTime is { } roundTripTime)
+            writer.Write(RouteMetricAttributes.RoundTripTime, RouteMetrics.EncodeTimeSpan(roundTripTime, RouteMetrics.RoundTripTimeTicksPerUnit));
+        if (metrics.RoundTripTimeVariance is { } roundTripTimeVariance)
+            writer.Write(RouteMetricAttributes.RoundTripTimeVariance, RouteMetrics.EncodeTimeSpan(roundTripTimeVariance, RouteMetrics.RoundTripTimeVarianceTicksPerUnit));
+        if (metrics.SlowStartThreshold is { } slowStartThreshold)
+            writer.Write(RouteMetricAttributes.SlowStartThreshold, slowStartThreshold);
+        if (metrics.CongestionWindow is { } congestionWindow)
+            writer.Write(RouteMetricAttributes.CongestionWindow, congestionWindow);
+        if (metrics.AdvertisedMss is { } advertisedMss)
+            writer.Write(RouteMetricAttributes.AdvertisedMss, advertisedMss);
+        if (metrics.Reordering is { } reordering)
+            writer.Write(RouteMetricAttributes.Reordering, reordering);
+        if (metrics.HopLimit is { } hopLimit)
+            writer.Write(RouteMetricAttributes.HopLimit, hopLimit);
+        if (metrics.InitialCongestionWindow is { } initialCongestionWindow)
+            writer.Write(RouteMetricAttributes.InitialCongestionWindow, initialCongestionWindow);
+        if (metrics.Features != RouteMetricFeatures.None)
+            writer.Write(RouteMetricAttributes.Features, metrics.Features);
+        if (metrics.MinimumRetransmissionTime is { } minimumRetransmissionTime)
+            writer.Write(RouteMetricAttributes.MinimumRetransmissionTime, RouteMetrics.EncodeTimeSpan(minimumRetransmissionTime, RouteMetrics.MinimumRetransmissionTimeTicksPerUnit));
+        if (metrics.InitialReceiveWindow is { } initialReceiveWindow)
+            writer.Write(RouteMetricAttributes.InitialReceiveWindow, initialReceiveWindow);
+        if (metrics.QuickAck is { } quickAck)
+            writer.Write(RouteMetricAttributes.QuickAck, quickAck);
+        if (metrics.CongestionControlAlgorithm is { } congestionControlAlgorithm)
+            writer.Write(RouteMetricAttributes.CongestionControlAlgorithm, congestionControlAlgorithm);
+        if (metrics.FastOpenNoCookie is { } fastOpenNoCookie)
+            writer.Write(RouteMetricAttributes.FastOpenNoCookie, fastOpenNoCookie);
     }
 
     private static void WriteAddress(NetlinkAttributeWriter<RouteAttributes> writer, RouteAttributes attribute, IPAddress address)

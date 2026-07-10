@@ -16,7 +16,8 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                                      RouteProtocol protocol = RouteProtocol.Static,
                                      RouteScope scope = RouteScope.Universe,
                                      RouteType type = RouteType.Unicast,
-                                     byte typeOfService = 0)
+                                     byte typeOfService = 0,
+                                     RouteMetrics? metrics = null)
 {
     public AddressFamily AddressFamily => addressFamily;
     public RouteAddress? Source => source;
@@ -32,6 +33,7 @@ public sealed class RouteInformation(AddressFamily addressFamily,
     public RouteScope Scope => scope;
     public RouteType Type => type;
     public byte TypeOfService => typeOfService;
+    public RouteMetrics? Metrics => metrics;
 
     public RouteInformation(RouteAddress destination,
                             RouteAddress? source = null,
@@ -45,13 +47,14 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                             RouteProtocol protocol = RouteProtocol.Static,
                             RouteScope scope = RouteScope.Universe,
                             RouteType type = RouteType.Unicast,
-                            byte typeOfService = 0)
-        : this(destination.AddressFamily, source, destination, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, preference, protocol, scope, type, typeOfService)
+                            byte typeOfService = 0,
+                            RouteMetrics? metrics = null)
+        : this(destination.AddressFamily, source, destination, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, preference, protocol, scope, type, typeOfService, metrics)
     {
     }
 
     public RouteInformation WithOutputInterfaceIndex(int outputInterfaceIndex)
     {
-        return new(AddressFamily, Source, Destination, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Preference, Protocol, Scope, Type, TypeOfService);
+        return new(AddressFamily, Source, Destination, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Preference, Protocol, Scope, Type, TypeOfService, Metrics);
     }
 }
