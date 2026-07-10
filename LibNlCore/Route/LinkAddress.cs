@@ -9,6 +9,6 @@ public sealed class LinkAddress(IPAddress address, byte prefixLength, bool noDad
     public new static LinkAddress Parse(string addressString)
     {
         var (address, prefixLength) = ParseComponents(addressString);
-        return new(address, prefixLength, noDad: true);
+        return new(address, prefixLength);
     }
 }
