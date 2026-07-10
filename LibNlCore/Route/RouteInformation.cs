@@ -50,7 +50,7 @@ public sealed class RouteInformation(AddressFamily addressFamily,
     {
     }
 
-    public RouteInformation WithOutputInterfaceIndex(int? outputInterfaceIndex)
+    public RouteInformation WithOutputInterfaceIndex(int outputInterfaceIndex)
     {
         return new(AddressFamily, Source, Destination, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Preference, Protocol, Scope, Type, TypeOfService);
     }
