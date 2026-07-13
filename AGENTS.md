@@ -65,6 +65,15 @@ RouteNetlinkSocket / EthToolNetlinkSocket    ← Socket-level API
 - Socket lifecycle managed via `using` statements
 - `InternalsVisibleTo("LibNlCore.Tests")` exposes internals to the test project
 
+## Netlink Validation Policy
+
+- Do not duplicate semantic or range validation already performed by the Linux kernel for outbound netlink requests. Let the request reach the kernel so callers retain its errno and extended-ack details through `NetlinkException`.
+- Validate locally when a value cannot be represented safely on the wire, when enforcing a library-level invariant the kernel cannot know, or when Linux accepts a replace/delete value but redirects it to a different route key or turns an explicit key component into a wildcard.
+- Allow harmless normalization of stored values. Also allow attributes the kernel ignores during deletion because they are not part of the deletion key.
+- Verify new validation against kernel source and, where practical, a raw-netlink test. Linux behavior can be asymmetric; for example, route output interface index zero is treated as unspecified while a negative index is rejected.
+- Put checks for dangerous mutation-key reinterpretation at the serialization boundary and explain the kernel behavior in the exception or a nearby comment. Preserve established public validation contracts unless intentionally making a breaking change.
+- Trust incoming kernel netlink messages rather than adding semantic or exact-length validation to response parsers. Bounds-checked parsing may still throw on malformed data; local validation is for outbound requests.
+
 ## Code Style
 
 Configured in `.editorconfig`:

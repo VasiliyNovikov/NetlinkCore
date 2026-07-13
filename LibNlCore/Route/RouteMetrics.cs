@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 
 namespace LibNlCore.Route;
 
@@ -27,8 +28,8 @@ public sealed class RouteMetrics(RouteMetricLocks locks = RouteMetricLocks.None,
     public RouteMetricLocks Locks => locks;
     public uint? Mtu => mtu;
     public uint? Window => window;
-    public TimeSpan? RoundTripTime { get; } = ValidateTimeSpan(roundTripTime, RoundTripTimeTicksPerUnit, nameof(roundTripTime));
-    public TimeSpan? RoundTripTimeVariance { get; } = ValidateTimeSpan(roundTripTimeVariance, RoundTripTimeVarianceTicksPerUnit, nameof(roundTripTimeVariance));
+    public TimeSpan? RoundTripTime { get; } = ValidateTimeSpan(roundTripTime, RoundTripTimeTicksPerUnit);
+    public TimeSpan? RoundTripTimeVariance { get; } = ValidateTimeSpan(roundTripTimeVariance, RoundTripTimeVarianceTicksPerUnit);
     public uint? SlowStartThreshold => slowStartThreshold;
     public uint? CongestionWindow => congestionWindow;
     public uint? AdvertisedMss => advertisedMss;
@@ -36,7 +37,7 @@ public sealed class RouteMetrics(RouteMetricLocks locks = RouteMetricLocks.None,
     public uint? HopLimit => hopLimit;
     public uint? InitialCongestionWindow => initialCongestionWindow;
     public RouteMetricFeatures Features => features;
-    public TimeSpan? MinimumRetransmissionTime { get; } = ValidateTimeSpan(minimumRetransmissionTime, MinimumRetransmissionTimeTicksPerUnit, nameof(minimumRetransmissionTime));
+    public TimeSpan? MinimumRetransmissionTime { get; } = ValidateTimeSpan(minimumRetransmissionTime, MinimumRetransmissionTimeTicksPerUnit);
     public uint? InitialReceiveWindow => initialReceiveWindow;
     public uint? QuickAck => quickAck;
     public string? CongestionControlAlgorithm => congestionControlAlgorithm;
@@ -63,12 +64,12 @@ public sealed class RouteMetrics(RouteMetricLocks locks = RouteMetricLocks.None,
     internal static TimeSpan DecodeTimeSpan(uint value, long ticksPerUnit) => TimeSpan.FromTicks(value * ticksPerUnit);
     internal static uint EncodeTimeSpan(TimeSpan value, long ticksPerUnit) => checked((uint)(value.Ticks / ticksPerUnit));
 
-    private static TimeSpan? ValidateTimeSpan(TimeSpan? value, long ticksPerUnit, string parameterName)
+    private static TimeSpan? ValidateTimeSpan(TimeSpan? value, long ticksPerUnit, [CallerArgumentExpression(nameof(value))] string paramName = "")
     {
         return value is { } actual
             ? actual >= TimeSpan.Zero && actual.Ticks / ticksPerUnit <= uint.MaxValue
                 ? actual
-                : throw new ArgumentOutOfRangeException(parameterName, value, "The interval must be a non-negative and fit in a 32-bit route metric.")
+                : throw new ArgumentOutOfRangeException(paramName, value, "The interval must be non-negative and fit in a 32-bit route metric.")
             : null;
     }
 }

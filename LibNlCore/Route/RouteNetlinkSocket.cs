@@ -296,7 +296,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
         writer.Type = RouteNetlinkMessageType.NewRoute;
         writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Exclusive | NetlinkMessageFlags.Ack;
-        WriteRoute(writer, route);
+        WriteRoute(writer, route, RouteOperation.Add);
         Post(buffer, writer);
     }
 
@@ -306,7 +306,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
         writer.Type = RouteNetlinkMessageType.NewRoute;
         writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Replace | NetlinkMessageFlags.Ack;
-        WriteRoute(writer, route);
+        WriteRoute(writer, route, RouteOperation.Replace);
         Post(buffer, writer);
     }
 
@@ -316,15 +316,15 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
         writer.Type = RouteNetlinkMessageType.DeleteRoute;
         writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Ack;
-        WriteRoute(writer, route);
+        WriteRoute(writer, route, RouteOperation.Delete);
         Post(buffer, writer);
     }
 
     private static RouteInformation ParseRoute(RouteNetlinkMessage<RouteMessage, RouteAttributes> message)
     {
         var addressFamily = ToAddressFamily(message.Header.Family);
-        RouteAddress? source = null;
-        RouteAddress? destination = null;
+        IPAnyNetwork? source = null;
+        IPAnyNetwork? destination = null;
         IPAddress? gateway = null;
         int? inputInterfaceIndex = null;
         int? outputInterfaceIndex = null;
@@ -338,16 +338,16 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             switch (attribute.Name)
             {
                 case RouteAttributes.Source:
-                    source = new RouteAddress(new IPAddress(attribute.Data), message.Header.SourceLength);
+                    source = new IPAnyNetwork(new IPAnyAddress(attribute.Data), message.Header.SourceLength, false);
                     break;
                 case RouteAttributes.Destination:
-                    destination = new RouteAddress(new IPAddress(attribute.Data), message.Header.DestinationLength);
+                    destination = new IPAnyNetwork(new IPAnyAddress(attribute.Data), message.Header.DestinationLength, false);
                     break;
                 case RouteAttributes.Gateway:
                     gateway = new IPAddress(attribute.Data);
                     break;
                 case RouteAttributes.Via:
-                    gateway = new IPAddress(attribute.Data[sizeof(ushort)..]); // We just trust the kernel and skip the address family
+                    gateway = new IPAddress(attribute.Data[sizeof(ushort)..]);
                     break;
                 case RouteAttributes.InputInterface:
                     inputInterfaceIndex = attribute.AsValue<int>();
@@ -389,11 +389,13 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                                     metrics);
     }
 
-    private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route)
+    private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route, RouteOperation operation)
     {
+        ValidateRoute(route, operation);
+
         writer.Header.Family = ToLinuxAddressFamily(route.AddressFamily);
-        writer.Header.SourceLength = route.Source?.PrefixLength ?? 0;
-        writer.Header.DestinationLength = route.Destination?.PrefixLength ?? 0;
+        writer.Header.SourceLength = route.Source?.Prefix ?? 0;
+        writer.Header.DestinationLength = route.Destination?.Prefix ?? 0;
         writer.Header.Table = route.Table <= byte.MaxValue ? (byte)route.Table : (byte)RouteTable.Unspecified;
         writer.Header.Protocol = route.Protocol;
         writer.Header.Scope = route.Scope;
@@ -401,12 +403,12 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Header.TypeOfService = route.TypeOfService;
 
         if (route.Source is { } source)
-            WriteAddress(writer.Attributes, RouteAttributes.Source, source.Address);
+            writer.Attributes.Write(RouteAttributes.Source, source.Address.Bytes);
         if (route.Destination is { } destination)
-            WriteAddress(writer.Attributes, RouteAttributes.Destination, destination.Address);
+            writer.Attributes.Write(RouteAttributes.Destination, destination.Address.Bytes);
         if (route.Gateway is { } gateway)
             if (gateway.AddressFamily == route.AddressFamily)
-                WriteAddress(writer.Attributes, RouteAttributes.Gateway, gateway);
+                writer.Attributes.Write(RouteAttributes.Gateway, ((IPAnyAddress)gateway).Bytes);
             else
             {
                 var data = writer.Attributes.PrepareWrite(RouteAttributes.Via, sizeof(ushort) + GetAddressSize(gateway.AddressFamily));
@@ -420,7 +422,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         if (route.Priority is { } priority)
             writer.Attributes.Write(RouteAttributes.Priority, priority);
         if (route.PreferredSource is { } preferredSource)
-            WriteAddress(writer.Attributes, RouteAttributes.PreferredSource, preferredSource);
+            writer.Attributes.Write(RouteAttributes.PreferredSource, ((IPAnyAddress)preferredSource).Bytes);
         if (route.Table > byte.MaxValue)
             writer.Attributes.Write(RouteAttributes.Table, route.Table);
         if (route.Preference is { } preference)
@@ -430,6 +432,115 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             using var metricAttributes = writer.Attributes.WriteNested<RouteMetricAttributes>(RouteAttributes.Metrics);
             WriteRouteMetrics(metricAttributes.Writer, metrics);
         }
+    }
+
+    private static void ValidateRoute(RouteInformation route, RouteOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+
+        var isReplace = operation == RouteOperation.Replace;
+        var isDelete = operation == RouteOperation.Delete;
+        if (route.Source is { } source && operation != RouteOperation.Add)
+        {
+            if (route.AddressFamily != AddressFamily.InterNetwork && IsMismatchedPrefixSilentlyAccepted(route.AddressFamily, source))
+                throw new ArgumentException($"Route source family {source.Address.AddressFamily} does not match {route.AddressFamily}; Linux would reinterpret its bytes.", nameof(route));
+        }
+
+        if (operation != RouteOperation.Add && route.Destination is { } destination && IsMismatchedPrefixSilentlyAccepted(route.AddressFamily, destination))
+            throw new ArgumentException($"Route destination family {destination.Address.AddressFamily} does not match {route.AddressFamily}; Linux would reinterpret its bytes.", nameof(route));
+
+        if (isDelete && route.AddressFamily == AddressFamily.InterNetwork && route.PreferredSource is { } preferredSource)
+        {
+            if (IsUnspecifiedAddress(preferredSource))
+                throw new ArgumentException($"Linux treats preferred source {preferredSource} as unspecified; omit PreferredSource.", nameof(route));
+            if (preferredSource.AddressFamily == AddressFamily.InterNetworkV6)
+                throw new ArgumentException("Route preferred-source family does not match InterNetwork; Linux would truncate its bytes.", nameof(route));
+        }
+
+        if (isDelete && route.AddressFamily == AddressFamily.InterNetwork && route.Gateway is { AddressFamily: AddressFamily.InterNetwork } gateway && IsUnspecifiedAddress(gateway))
+            throw new ArgumentException($"Linux treats gateway {gateway} as a direct or unspecified route selector; omit Gateway.", nameof(route));
+
+        if (route.Gateway is { AddressFamily: AddressFamily.InterNetworkV6, ScopeId: not 0 } scopedGateway)
+        {
+            if (scopedGateway.ScopeId > int.MaxValue || route.OutputInterfaceIndex != (int)scopedGateway.ScopeId)
+                throw new ArgumentException($"IPv6 gateway scope ID {scopedGateway.ScopeId} is not encoded on the wire; use the same OutputInterfaceIndex.", nameof(route));
+        }
+
+        if (isDelete && route.OutputInterfaceIndex == 0)
+            throw new ArgumentException("Linux treats output interface index 0 as unspecified; omit OutputInterfaceIndex or use a nonzero index.", nameof(route));
+
+        if (operation != RouteOperation.Add && route.Table == RouteTable.Unspecified)
+            throw new ArgumentException("Linux resolves route table 0 to the main table; specify RouteTable.Main explicitly.", nameof(route));
+
+        if (route.Priority == 0 && (isDelete || isReplace && route.AddressFamily == AddressFamily.InterNetworkV6))
+            throw new ArgumentException(isDelete
+                                            ? "Linux treats route priority 0 as a wildcard when deleting routes; omit Priority."
+                                            : "Linux replaces IPv6 route priority 0 with 1024, changing the replacement key; omit Priority.",
+                                        nameof(route));
+
+        if (isDelete)
+        {
+            if (route.Protocol == RouteProtocol.Unspecified)
+                throw new ArgumentException("Linux treats protocol 0 as a wildcard when deleting routes; specify Protocol.", nameof(route));
+            if (route.AddressFamily == AddressFamily.InterNetwork && route.Scope == RouteScope.NoWhere)
+                throw new ArgumentException("Linux treats scope Nowhere as a wildcard when deleting IPv4 routes; specify Scope.", nameof(route));
+            if (route.AddressFamily == AddressFamily.InterNetwork && route.Type == RouteType.Unspecified)
+                throw new ArgumentException("Linux treats route type Unspecified as a wildcard when deleting IPv4 routes; specify Type.", nameof(route));
+        }
+
+        if (isDelete && route.AddressFamily == AddressFamily.InterNetwork && route.Metrics is { } metrics)
+        {
+            ValidateDeleteMetricTime(route, metrics.RoundTripTime, RouteMetrics.RoundTripTimeTicksPerUnit, nameof(RouteMetrics.RoundTripTime));
+            ValidateDeleteMetricTime(route, metrics.RoundTripTimeVariance, RouteMetrics.RoundTripTimeVarianceTicksPerUnit, nameof(RouteMetrics.RoundTripTimeVariance));
+            ValidateDeleteMetricTime(route, metrics.MinimumRetransmissionTime, RouteMetrics.MinimumRetransmissionTimeTicksPerUnit, nameof(RouteMetrics.MinimumRetransmissionTime));
+            if (metrics.CongestionControlAlgorithm is not null)
+                throw new ArgumentException("CongestionControlAlgorithm cannot safely be used as a deletion key because Linux maps unavailable names to the unset metric.", nameof(route));
+        }
+    }
+
+    private static bool IsMismatchedPrefixSilentlyAccepted(AddressFamily routeFamily, IPAnyNetwork network)
+    {
+        if (network.Address.AddressFamily == routeFamily || network.Prefix is 0 or > 32)
+            return false;
+        if (routeFamily == AddressFamily.InterNetworkV6)
+            return network.Address.AddressFamily == AddressFamily.InterNetwork;
+        if (routeFamily != AddressFamily.InterNetwork || network.Address.AddressFamily != AddressFamily.InterNetworkV6)
+            return false;
+
+        return HasZeroHostBits(network.Address.Bytes[..4], network.Prefix);
+    }
+
+    private static bool IsUnspecifiedAddress(IPAddress address)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        address.TryWriteBytes(bytes, out var bytesWritten);
+        return bytes[..bytesWritten].IndexOfAnyExcept((byte)0) < 0;
+    }
+
+    private static bool HasZeroHostBits(ReadOnlySpan<byte> bytes, byte prefixLength)
+    {
+        var firstHostByte = prefixLength / 8;
+        var prefixBitsInByte = prefixLength % 8;
+        if (prefixBitsInByte != 0)
+        {
+            if ((bytes[firstHostByte] & (byte)(byte.MaxValue >> prefixBitsInByte)) != 0)
+                return false;
+            firstHostByte++;
+        }
+        return bytes[firstHostByte..].IndexOfAnyExcept((byte)0) < 0;
+    }
+
+    private static void ValidateDeleteMetricTime(RouteInformation route, TimeSpan? value, long ticksPerUnit, string metricName)
+    {
+        if (value is { } actual && actual.Ticks % ticksPerUnit != 0)
+            throw new ArgumentException($"{metricName} is not exactly representable in the route deletion key.", nameof(route));
+    }
+
+    private enum RouteOperation
+    {
+        Add,
+        Replace,
+        Delete
     }
 
     private static RouteMetrics ParseRouteMetrics(NetlinkAttributeCollection<RouteMetricAttributes> attributes)
@@ -563,11 +674,6 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             writer.Write(RouteMetricAttributes.CongestionControlAlgorithm, congestionControlAlgorithm);
         if (metrics.FastOpenNoCookie is { } fastOpenNoCookie)
             writer.Write(RouteMetricAttributes.FastOpenNoCookie, fastOpenNoCookie);
-    }
-
-    private static void WriteAddress(NetlinkAttributeWriter<RouteAttributes> writer, RouteAttributes attribute, IPAddress address)
-    {
-        address.TryWriteBytes(writer.PrepareWrite(attribute, GetAddressSize(address.AddressFamily)), out _);
     }
 
     private static int GetAddressSize(AddressFamily addressFamily)

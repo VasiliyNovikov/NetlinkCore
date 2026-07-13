@@ -1,11 +1,13 @@
 using System.Net;
 using System.Net.Sockets;
 
+using NetworkingPrimitivesCore;
+
 namespace LibNlCore.Route;
 
 public sealed class RouteInformation(AddressFamily addressFamily,
-                                     RouteAddress? source = null,
-                                     RouteAddress? destination = null,
+                                     IPAnyNetwork? source = null,
+                                     IPAnyNetwork? destination = null,
                                      IPAddress? gateway = null,
                                      int? inputInterfaceIndex = null,
                                      int? outputInterfaceIndex = null,
@@ -20,8 +22,8 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                                      RouteMetrics? metrics = null)
 {
     public AddressFamily AddressFamily => addressFamily;
-    public RouteAddress? Source => source;
-    public RouteAddress? Destination => destination;
+    public IPAnyNetwork? Source => source;
+    public IPAnyNetwork? Destination => destination;
     public IPAddress? Gateway => gateway;
     public int? InputInterfaceIndex => inputInterfaceIndex;
     public int? OutputInterfaceIndex => outputInterfaceIndex;
@@ -35,8 +37,8 @@ public sealed class RouteInformation(AddressFamily addressFamily,
     public byte TypeOfService => typeOfService;
     public RouteMetrics? Metrics => metrics;
 
-    public RouteInformation(RouteAddress destination,
-                            RouteAddress? source = null,
+    public RouteInformation(IPAnyNetwork destination,
+                            IPAnyNetwork? source = null,
                             IPAddress? gateway = null,
                             int? inputInterfaceIndex = null,
                             int? outputInterfaceIndex = null,
@@ -49,7 +51,7 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                             RouteType type = RouteType.Unicast,
                             byte typeOfService = 0,
                             RouteMetrics? metrics = null)
-        : this(destination.AddressFamily, source, destination, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, preference, protocol, scope, type, typeOfService, metrics)
+        : this(destination.Address.AddressFamily, source, destination, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, preference, protocol, scope, type, typeOfService, metrics)
     {
     }
 

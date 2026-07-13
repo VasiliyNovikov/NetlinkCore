@@ -2,12 +2,13 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-
 using LibNlCore.Links;
 using LibNlCore.Route;
 
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
 using NetNsCore;
+
 using NetworkingPrimitivesCore;
 
 namespace LibNlCore.Tests;
@@ -108,7 +109,7 @@ public class LinkTests
 
         Assert.ThrowsExactly<AssertFailedException>(() => Script.Exec("ip", "link", "show", vethName));
         Assert.ThrowsExactly<AssertFailedException>(() => Script.Exec("ip", "link", "show", vethPeerName));
-        
+
         try
         {
             var (veth, vethPeer) = collection.CreateVEth(vethName, vethPeerName);
@@ -160,12 +161,12 @@ public class LinkTests
         const string bridgeName = "test_rtbr0";
         const string nsName = "linkroutetestns";
         const uint table = 50003;
-        var route = new RouteInformation(RouteAddress.Parse("203.0.113.0/24"),
+        var route = new RouteInformation(IPAnyNetwork.Parse("203.0.113.0/24"),
                                          priority: 100,
                                          preferredSource: IPAddress.Parse("192.0.2.3"),
                                          table: table,
                                          scope: RouteScope.Link);
-        var replacement = new RouteInformation(RouteAddress.Parse("203.0.113.0/24"),
+        var replacement = new RouteInformation(IPAnyNetwork.Parse("203.0.113.0/24"),
                                                priority: 100,
                                                preferredSource: IPAddress.Parse("192.0.2.4"),
                                                table: table,
@@ -217,6 +218,6 @@ public class LinkTests
 
         return;
 
-        static bool IsTestRoute(RouteInformation route) => route.Destination == RouteAddress.Parse("203.0.113.0/24");
+        static bool IsTestRoute(RouteInformation route) => route.Destination == IPAnyNetwork.Parse("203.0.113.0/24");
     }
 }
