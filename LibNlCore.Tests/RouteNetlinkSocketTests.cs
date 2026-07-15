@@ -79,22 +79,12 @@ public class RouteNetlinkSocketTests
                                                                                                                 outputInterfaceIndex: 0)));
                 Assert.Contains("index 0", error.Message);
 
-                Assert.ThrowsExactly<ArgumentException>(() => socket.DeleteRoute(new RouteInformation(AddressFamily.InterNetwork,
-                                                                                                        gateway: IPAddress.Any)));
-                Assert.ThrowsExactly<ArgumentException>(() => socket.DeleteRoute(new RouteInformation(AddressFamily.InterNetwork,
-                                                                                                        priority: 0)));
                 Assert.ThrowsExactly<ArgumentException>(() => socket.ReplaceRoute(new RouteInformation(AddressFamily.InterNetwork,
                                                                                                         table: RouteTable.Unspecified)));
                 Assert.ThrowsExactly<ArgumentException>(() => socket.ReplaceRoute(new RouteInformation(AddressFamily.InterNetworkV6,
                                                                                                         priority: 0)));
                 Assert.ThrowsExactly<ArgumentException>(() => socket.DeleteRoute(new RouteInformation(AddressFamily.InterNetwork,
-                                                                                                        protocol: RouteProtocol.Unspecified)));
-                Assert.ThrowsExactly<ArgumentException>(() => socket.DeleteRoute(new RouteInformation(AddressFamily.InterNetwork,
-                                                                                                        scope: RouteScope.NoWhere)));
-                Assert.ThrowsExactly<ArgumentException>(() => socket.DeleteRoute(new RouteInformation(AddressFamily.InterNetwork,
                                                                                                         type: RouteType.Unspecified)));
-                Assert.ThrowsExactly<ArgumentException>(() => socket.DeleteRoute(new RouteInformation(AddressFamily.InterNetwork,
-                                                                                                        metrics: new RouteMetrics(congestionControlAlgorithm: "cubic"))));
                 Assert.ThrowsExactly<ArgumentException>(() => socket.DeleteRoute(new RouteInformation(AddressFamily.InterNetwork,
                                                                                                         metrics: new RouteMetrics(roundTripTime: TimeSpan.FromTicks(1)))));
             }
@@ -138,6 +128,70 @@ public class RouteNetlinkSocketTests
                                                                                                     preferredSource: IPAddress.Parse("192.0.2.1"))));
                 Assert.ThrowsExactly<NetlinkException>(() => socket.AddRoute(new RouteInformation(AddressFamily.InterNetworkV6,
                                                                                                     gateway: IPAddress.IPv6Any)));
+            }
+        }
+        finally
+        {
+            NetNs.Delete(nsName);
+        }
+    }
+
+    [TestMethod]
+    public void RouteNetlinkSocket_Deletes_Routes_Returned_By_GetRoutes()
+    {
+        const string nsName = "routegetdeltestns";
+        const string linkName = "routegetdel";
+        const uint blackholeTable = 50006;
+        const uint viaTable = 50007;
+        var blackholeDestination = IPAnyNetwork.Parse("198.51.120.0/24");
+        var viaDestination = IPAnyNetwork.Parse("198.51.121.0/24");
+        var localDestination = IPAnyNetwork.Parse("2001:db8:120::1/128");
+
+        NetNs.Create(nsName);
+        try
+        {
+            using var ns = NetNs.Open(nsName);
+            using (ns.Enter())
+            using (var socket = new RouteNetlinkSocket())
+            {
+                socket.CreateBridge(linkName);
+                try
+                {
+                    var link = socket.GetLink(linkName);
+                    socket.UpdateLink(link, link with { Up = true });
+                    socket.AddAddress(link.Index, new LinkAddress(IPAddress.Parse("2001:db8:120::1"), 64, true));
+                    Script.Exec("ip", "route", "add", "blackhole", "198.51.120.0/24", "table", blackholeTable.ToString(CultureInfo.InvariantCulture), "proto", "0", "scope", "nowhere");
+                    socket.AddRoute(new RouteInformation(AddressFamily.InterNetwork,
+                                                         outputInterfaceIndex: link.Index,
+                                                         scope: RouteScope.Link));
+                    socket.AddRoute(new RouteInformation(viaDestination,
+                                                         gateway: IPAddress.Any,
+                                                         outputInterfaceIndex: link.Index,
+                                                         table: viaTable));
+
+                    var blackhole = socket.GetRoutes(AddressFamily.InterNetwork, blackholeTable).Single(route => route.Destination == blackholeDestination);
+                    Assert.AreEqual(RouteProtocol.Unspecified, blackhole.Protocol);
+                    Assert.AreEqual(RouteScope.NoWhere, blackhole.Scope);
+                    socket.DeleteRoute(blackhole);
+
+                    var via = socket.GetRoutes(AddressFamily.InterNetwork, viaTable).Single(route => route.Destination == viaDestination);
+                    Assert.AreEqual(IPAddress.Any, via.Gateway);
+                    socket.DeleteRoute(via);
+
+                    var local = socket.GetRoutes(AddressFamily.InterNetworkV6, RouteTable.Local).Single(route => route.Destination == localDestination);
+                    Assert.AreEqual(0u, local.Priority);
+                    socket.DeleteRoute(local);
+
+                    Assert.IsEmpty(socket.GetRoutes(AddressFamily.InterNetwork, blackholeTable));
+                    Assert.IsEmpty(socket.GetRoutes(AddressFamily.InterNetwork, viaTable));
+                    Assert.IsFalse(socket.GetRoutes(AddressFamily.InterNetworkV6, RouteTable.Local).Any(route => route.Destination == localDestination));
+                }
+                finally
+                {
+                    Script.ExecNoThrow("ip", "route", "flush", "table", blackholeTable.ToString(CultureInfo.InvariantCulture));
+                    Script.ExecNoThrow("ip", "route", "flush", "table", viaTable.ToString(CultureInfo.InvariantCulture));
+                    socket.DeleteLink(linkName);
+                }
             }
         }
         finally
@@ -451,12 +505,7 @@ public class RouteNetlinkSocketTests
                     Assert.HasCount(1, routes);
                     AssertRoute(replacement, routes[0]);
 
-                    socket.DeleteRoute(new RouteInformation(IPAnyNetwork.Parse("198.51.100.0/24"),
-                                                            outputInterfaceIndex: link.Index,
-                                                            priority: 100,
-                                                            preferredSource: IPAddress.Parse("192.0.2.2"),
-                                                            table: table,
-                                                            scope: RouteScope.Link));
+                    socket.DeleteRoute(routes[0]);
                     Assert.IsEmpty(socket.GetRoutes(AddressFamily.InterNetwork, table).Where(IsTestRoute));
                 }
                 finally

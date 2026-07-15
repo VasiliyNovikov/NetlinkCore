@@ -407,7 +407,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         if (route.Destination is { } destination)
             writer.Attributes.Write(RouteAttributes.Destination, destination.Address.Bytes);
         if (route.Gateway is { } gateway)
-            if (gateway.AddressFamily == route.AddressFamily)
+            // RTA_GATEWAY=0 loses its family; RTA_VIA preserves an explicit IPv4 zero gateway.
+            if (gateway.AddressFamily == route.AddressFamily &&
+                !(route.AddressFamily == AddressFamily.InterNetwork && IsUnspecifiedAddress(gateway)))
                 writer.Attributes.Write(RouteAttributes.Gateway, ((IPAnyAddress)gateway).Bytes);
             else
             {
@@ -419,7 +421,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             writer.Attributes.Write(RouteAttributes.InputInterface, inputInterfaceIndex);
         if (route.OutputInterfaceIndex is { } outputInterfaceIndex)
             writer.Attributes.Write(RouteAttributes.OutputInterface, outputInterfaceIndex);
-        if (route.Priority is { } priority)
+        if (route.Priority is { } priority && !(operation == RouteOperation.Delete && priority == 0))
             writer.Attributes.Write(RouteAttributes.Priority, priority);
         if (route.PreferredSource is { } preferredSource)
             writer.Attributes.Write(RouteAttributes.PreferredSource, ((IPAnyAddress)preferredSource).Bytes);
@@ -449,16 +451,13 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         if (operation != RouteOperation.Add && route.Destination is { } destination && IsMismatchedPrefixSilentlyAccepted(route.AddressFamily, destination))
             throw new ArgumentException($"Route destination family {destination.Address.AddressFamily} does not match {route.AddressFamily}; Linux would reinterpret its bytes.", nameof(route));
 
-        if (isDelete && route.AddressFamily == AddressFamily.InterNetwork && route.PreferredSource is { } preferredSource)
+        if (isDelete && route is { AddressFamily: AddressFamily.InterNetwork, PreferredSource: { } preferredSource })
         {
             if (IsUnspecifiedAddress(preferredSource))
                 throw new ArgumentException($"Linux treats preferred source {preferredSource} as unspecified; omit PreferredSource.", nameof(route));
             if (preferredSource.AddressFamily == AddressFamily.InterNetworkV6)
                 throw new ArgumentException("Route preferred-source family does not match InterNetwork; Linux would truncate its bytes.", nameof(route));
         }
-
-        if (isDelete && route.AddressFamily == AddressFamily.InterNetwork && route.Gateway is { AddressFamily: AddressFamily.InterNetwork } gateway && IsUnspecifiedAddress(gateway))
-            throw new ArgumentException($"Linux treats gateway {gateway} as a direct or unspecified route selector; omit Gateway.", nameof(route));
 
         if (route.Gateway is { AddressFamily: AddressFamily.InterNetworkV6, ScopeId: not 0 } scopedGateway)
         {
@@ -472,29 +471,19 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         if (operation != RouteOperation.Add && route.Table == RouteTable.Unspecified)
             throw new ArgumentException("Linux resolves route table 0 to the main table; specify RouteTable.Main explicitly.", nameof(route));
 
-        if (route.Priority == 0 && (isDelete || isReplace && route.AddressFamily == AddressFamily.InterNetworkV6))
-            throw new ArgumentException(isDelete
-                                            ? "Linux treats route priority 0 as a wildcard when deleting routes; omit Priority."
-                                            : "Linux replaces IPv6 route priority 0 with 1024, changing the replacement key; omit Priority.",
-                                        nameof(route));
+        if (route.Priority == 0 && isReplace && route.AddressFamily == AddressFamily.InterNetworkV6)
+            throw new ArgumentException("Linux replaces IPv6 route priority 0 with 1024, changing the replacement key; omit Priority.", nameof(route));
 
-        if (isDelete)
+        if (isDelete && route.AddressFamily == AddressFamily.InterNetwork)
         {
-            if (route.Protocol == RouteProtocol.Unspecified)
-                throw new ArgumentException("Linux treats protocol 0 as a wildcard when deleting routes; specify Protocol.", nameof(route));
-            if (route.AddressFamily == AddressFamily.InterNetwork && route.Scope == RouteScope.NoWhere)
-                throw new ArgumentException("Linux treats scope Nowhere as a wildcard when deleting IPv4 routes; specify Scope.", nameof(route));
-            if (route.AddressFamily == AddressFamily.InterNetwork && route.Type == RouteType.Unspecified)
+            if (route.Type == RouteType.Unspecified)
                 throw new ArgumentException("Linux treats route type Unspecified as a wildcard when deleting IPv4 routes; specify Type.", nameof(route));
-        }
-
-        if (isDelete && route.AddressFamily == AddressFamily.InterNetwork && route.Metrics is { } metrics)
-        {
-            ValidateDeleteMetricTime(route, metrics.RoundTripTime, RouteMetrics.RoundTripTimeTicksPerUnit, nameof(RouteMetrics.RoundTripTime));
-            ValidateDeleteMetricTime(route, metrics.RoundTripTimeVariance, RouteMetrics.RoundTripTimeVarianceTicksPerUnit, nameof(RouteMetrics.RoundTripTimeVariance));
-            ValidateDeleteMetricTime(route, metrics.MinimumRetransmissionTime, RouteMetrics.MinimumRetransmissionTimeTicksPerUnit, nameof(RouteMetrics.MinimumRetransmissionTime));
-            if (metrics.CongestionControlAlgorithm is not null)
-                throw new ArgumentException("CongestionControlAlgorithm cannot safely be used as a deletion key because Linux maps unavailable names to the unset metric.", nameof(route));
+            if (route.Metrics is { } metrics)
+            {
+                ValidateDeleteMetricTime(route, metrics.RoundTripTime, RouteMetrics.RoundTripTimeTicksPerUnit, nameof(RouteMetrics.RoundTripTime));
+                ValidateDeleteMetricTime(route, metrics.RoundTripTimeVariance, RouteMetrics.RoundTripTimeVarianceTicksPerUnit, nameof(RouteMetrics.RoundTripTimeVariance));
+                ValidateDeleteMetricTime(route, metrics.MinimumRetransmissionTime, RouteMetrics.MinimumRetransmissionTimeTicksPerUnit, nameof(RouteMetrics.MinimumRetransmissionTime));
+            }
         }
     }
 
