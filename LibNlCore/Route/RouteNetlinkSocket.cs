@@ -17,6 +17,17 @@ namespace LibNlCore.Route;
 
 public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
 {
+    private const long RoundTripTimeTicksPerUnit = TimeSpan.TicksPerMillisecond / 8;
+    private const long RoundTripTimeVarianceTicksPerUnit = TimeSpan.TicksPerMillisecond / 4;
+    private const long MinimumRetransmissionTimeTicksPerUnit = TimeSpan.TicksPerMillisecond;
+    private const RouteMessageFlags HarmlessRouteStatusFlags = RouteMessageFlags.Dead |
+                                                               RouteMessageFlags.NextHopOffload |
+                                                               RouteMessageFlags.LinkDown |
+                                                               RouteMessageFlags.NextHopTrap |
+                                                               RouteMessageFlags.Offloaded |
+                                                               RouteMessageFlags.Trap |
+                                                               RouteMessageFlags.OffloadFailed;
+
     #region Links
 
     public LinkInformation GetLink(string name)
@@ -333,6 +344,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         var table = (uint)message.Header.Table;
         RoutePreference? preference = null;
         RouteMetrics? metrics = null;
+        var mutationLimitations = (message.Header.Flags & ~(RouteMessageFlags.OnLink | HarmlessRouteStatusFlags)) == RouteMessageFlags.None
+            ? RouteMutationLimitations.None
+            : RouteMutationLimitations.Flags;
         foreach (var attribute in message.Attributes)
         {
             switch (attribute.Name)
@@ -368,7 +382,30 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                     preference = attribute.AsValue<RoutePreference>();
                     break;
                 case RouteAttributes.Metrics:
-                    metrics = ParseRouteMetrics(attribute.AsNested<RouteMetricAttributes>());
+                    metrics = ParseRouteMetrics(attribute.AsNested<RouteMetricAttributes>(), out var hasUnsupportedMetrics);
+                    if (hasUnsupportedMetrics)
+                        mutationLimitations |= RouteMutationLimitations.Metrics;
+                    break;
+                case RouteAttributes.NextHopId:
+                    mutationLimitations |= RouteMutationLimitations.NextHopId;
+                    break;
+                case RouteAttributes.Multipath:
+                    mutationLimitations |= RouteMutationLimitations.Multipath;
+                    break;
+                case RouteAttributes.Encap:
+                case RouteAttributes.EncapType:
+                    mutationLimitations |= RouteMutationLimitations.Encapsulation;
+                    break;
+                case RouteAttributes.Unspecified:
+                case RouteAttributes.Pad:
+                case RouteAttributes.UserId:
+                    break;
+                case RouteAttributes.CacheInfo:
+                    if (attribute.AsValue<RouteCacheInformation>().Expires != 0)
+                        mutationLimitations |= RouteMutationLimitations.Attributes;
+                    break;
+                default:
+                    mutationLimitations |= RouteMutationLimitations.Attributes;
                     break;
             }
         }
@@ -386,7 +423,11 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                                     message.Header.Scope,
                                     message.Header.RouteType,
                                     message.Header.TypeOfService,
-                                    metrics);
+                                    metrics,
+                                    message.Header.Flags.HasFlag(RouteMessageFlags.OnLink))
+        {
+            MutationLimitations = mutationLimitations
+        };
     }
 
     private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route, RouteOperation operation)
@@ -401,6 +442,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Header.Scope = route.Scope;
         writer.Header.RouteType = route.Type;
         writer.Header.TypeOfService = route.TypeOfService;
+        writer.Header.Flags = route.OnLink ? RouteMessageFlags.OnLink : RouteMessageFlags.None;
 
         if (route.Source is { } source)
             writer.Attributes.Write(RouteAttributes.Source, source.Address.Bytes);
@@ -440,24 +482,28 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     {
         ArgumentNullException.ThrowIfNull(route);
 
+        if (route.MutationLimitations != RouteMutationLimitations.None)
+            throw new NotSupportedException($"The route cannot be modified because it contains unsupported netlink data: {route.MutationLimitations}.");
+        if (operation != RouteOperation.Add && route.OnLink)
+            throw new NotSupportedException("On-link routes cannot be replaced or deleted exactly because Linux does not include the on-link flag in the mutation key.");
+
         var isReplace = operation == RouteOperation.Replace;
         var isDelete = operation == RouteOperation.Delete;
-        if (route.Source is { } source && operation != RouteOperation.Add)
+        if (route.Source is { } source)
         {
             if (route.AddressFamily != AddressFamily.InterNetwork && IsMismatchedPrefixSilentlyAccepted(route.AddressFamily, source))
                 throw new ArgumentException($"Route source family {source.Address.AddressFamily} does not match {route.AddressFamily}; Linux would reinterpret its bytes.", nameof(route));
         }
 
-        if (operation != RouteOperation.Add && route.Destination is { } destination && IsMismatchedPrefixSilentlyAccepted(route.AddressFamily, destination))
+        if (route.Destination is { } destination && IsMismatchedPrefixSilentlyAccepted(route.AddressFamily, destination))
             throw new ArgumentException($"Route destination family {destination.Address.AddressFamily} does not match {route.AddressFamily}; Linux would reinterpret its bytes.", nameof(route));
 
-        if (isDelete && route is { AddressFamily: AddressFamily.InterNetwork, PreferredSource: { } preferredSource })
+        if (route is { AddressFamily: AddressFamily.InterNetwork, PreferredSource: { AddressFamily: AddressFamily.InterNetworkV6 } preferredSource })
         {
-            if (IsUnspecifiedAddress(preferredSource))
-                throw new ArgumentException($"Linux treats preferred source {preferredSource} as unspecified; omit PreferredSource.", nameof(route));
-            if (preferredSource.AddressFamily == AddressFamily.InterNetworkV6)
-                throw new ArgumentException("Route preferred-source family does not match InterNetwork; Linux would truncate its bytes.", nameof(route));
+            throw new ArgumentException($"Route preferred-source family {preferredSource.AddressFamily} does not match {route.AddressFamily}; Linux would reinterpret its bytes.", nameof(route));
         }
+        if (isDelete && route is { AddressFamily: AddressFamily.InterNetwork, PreferredSource: { } ipv4PreferredSource } && IsUnspecifiedAddress(ipv4PreferredSource))
+            throw new ArgumentException($"Linux treats preferred source {ipv4PreferredSource} as unspecified; omit PreferredSource.", nameof(route));
 
         if (route.Gateway is { AddressFamily: AddressFamily.InterNetworkV6, ScopeId: not 0 } scopedGateway)
         {
@@ -474,15 +520,22 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         if (route.Priority == 0 && isReplace && route.AddressFamily == AddressFamily.InterNetworkV6)
             throw new ArgumentException("Linux replaces IPv6 route priority 0 with 1024, changing the replacement key; omit Priority.", nameof(route));
 
+        if (isDelete && route.Protocol == RouteProtocol.Unspecified)
+            throw new ArgumentException("Linux treats route protocol Unspecified as a wildcard when deleting routes; specify Protocol.", nameof(route));
+
+        if (isDelete && route.Priority == 0)
+            throw new ArgumentException("Linux treats route priority 0 as a wildcard when deleting routes; omit Priority or use a nonzero value.", nameof(route));
+
         if (isDelete && route.AddressFamily == AddressFamily.InterNetwork)
         {
             if (route.Type == RouteType.Unspecified)
                 throw new ArgumentException("Linux treats route type Unspecified as a wildcard when deleting IPv4 routes; specify Type.", nameof(route));
+            if (route.Scope == RouteScope.NoWhere)
+                throw new ArgumentException("Linux treats route scope NoWhere as a wildcard when deleting IPv4 routes; specify Scope.", nameof(route));
             if (route.Metrics is { } metrics)
             {
-                ValidateDeleteMetricTime(route, metrics.RoundTripTime, RouteMetrics.RoundTripTimeTicksPerUnit, nameof(RouteMetrics.RoundTripTime));
-                ValidateDeleteMetricTime(route, metrics.RoundTripTimeVariance, RouteMetrics.RoundTripTimeVarianceTicksPerUnit, nameof(RouteMetrics.RoundTripTimeVariance));
-                ValidateDeleteMetricTime(route, metrics.MinimumRetransmissionTime, RouteMetrics.MinimumRetransmissionTimeTicksPerUnit, nameof(RouteMetrics.MinimumRetransmissionTime));
+                if (metrics.CongestionControlAlgorithm is { } congestionControlAlgorithm && !TcpCongestionControlAlgorithms.IsAvailable(congestionControlAlgorithm))
+                    throw new ArgumentException($"Congestion control algorithm '{congestionControlAlgorithm}' is not currently available; Linux would reinterpret it as an unset deletion key.", nameof(route));
             }
         }
     }
@@ -519,12 +572,6 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         return bytes[firstHostByte..].IndexOfAnyExcept((byte)0) < 0;
     }
 
-    private static void ValidateDeleteMetricTime(RouteInformation route, TimeSpan? value, long ticksPerUnit, string metricName)
-    {
-        if (value is { } actual && actual.Ticks % ticksPerUnit != 0)
-            throw new ArgumentException($"{metricName} is not exactly representable in the route deletion key.", nameof(route));
-    }
-
     private enum RouteOperation
     {
         Add,
@@ -532,8 +579,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         Delete
     }
 
-    private static RouteMetrics ParseRouteMetrics(NetlinkAttributeCollection<RouteMetricAttributes> attributes)
+    private static RouteMetrics ParseRouteMetrics(NetlinkAttributeCollection<RouteMetricAttributes> attributes, out bool hasUnsupportedMetrics)
     {
+        hasUnsupportedMetrics = false;
         var locks = RouteMetricLocks.None;
         uint? mtu = null;
         uint? window = null;
@@ -565,10 +613,10 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                     window = attribute.AsValue<uint>();
                     break;
                 case RouteMetricAttributes.RoundTripTime:
-                    roundTripTime = RouteMetrics.DecodeTimeSpan(attribute.AsValue<uint>(), RouteMetrics.RoundTripTimeTicksPerUnit);
+                    roundTripTime = DecodeTimeSpan(attribute.AsValue<uint>(), RoundTripTimeTicksPerUnit);
                     break;
                 case RouteMetricAttributes.RoundTripTimeVariance:
-                    roundTripTimeVariance = RouteMetrics.DecodeTimeSpan(attribute.AsValue<uint>(), RouteMetrics.RoundTripTimeVarianceTicksPerUnit);
+                    roundTripTimeVariance = DecodeTimeSpan(attribute.AsValue<uint>(), RoundTripTimeVarianceTicksPerUnit);
                     break;
                 case RouteMetricAttributes.SlowStartThreshold:
                     slowStartThreshold = attribute.AsValue<uint>();
@@ -592,7 +640,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                     features = attribute.AsValue<RouteMetricFeatures>();
                     break;
                 case RouteMetricAttributes.MinimumRetransmissionTime:
-                    minimumRetransmissionTime = RouteMetrics.DecodeTimeSpan(attribute.AsValue<uint>(), RouteMetrics.MinimumRetransmissionTimeTicksPerUnit);
+                    minimumRetransmissionTime = DecodeTimeSpan(attribute.AsValue<uint>(), MinimumRetransmissionTimeTicksPerUnit);
                     break;
                 case RouteMetricAttributes.InitialReceiveWindow:
                     initialReceiveWindow = attribute.AsValue<uint>();
@@ -605,6 +653,11 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
                     break;
                 case RouteMetricAttributes.FastOpenNoCookie:
                     fastOpenNoCookie = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.Unspecified:
+                    break;
+                default:
+                    hasUnsupportedMetrics = true;
                     break;
             }
 
@@ -636,9 +689,9 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         if (metrics.Window is { } window)
             writer.Write(RouteMetricAttributes.Window, window);
         if (metrics.RoundTripTime is { } roundTripTime)
-            writer.Write(RouteMetricAttributes.RoundTripTime, RouteMetrics.EncodeTimeSpan(roundTripTime, RouteMetrics.RoundTripTimeTicksPerUnit));
+            writer.Write(RouteMetricAttributes.RoundTripTime, EncodeTimeSpan(roundTripTime, RoundTripTimeTicksPerUnit));
         if (metrics.RoundTripTimeVariance is { } roundTripTimeVariance)
-            writer.Write(RouteMetricAttributes.RoundTripTimeVariance, RouteMetrics.EncodeTimeSpan(roundTripTimeVariance, RouteMetrics.RoundTripTimeVarianceTicksPerUnit));
+            writer.Write(RouteMetricAttributes.RoundTripTimeVariance, EncodeTimeSpan(roundTripTimeVariance, RoundTripTimeVarianceTicksPerUnit));
         if (metrics.SlowStartThreshold is { } slowStartThreshold)
             writer.Write(RouteMetricAttributes.SlowStartThreshold, slowStartThreshold);
         if (metrics.CongestionWindow is { } congestionWindow)
@@ -654,7 +707,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         if (metrics.Features != RouteMetricFeatures.None)
             writer.Write(RouteMetricAttributes.Features, metrics.Features);
         if (metrics.MinimumRetransmissionTime is { } minimumRetransmissionTime)
-            writer.Write(RouteMetricAttributes.MinimumRetransmissionTime, RouteMetrics.EncodeTimeSpan(minimumRetransmissionTime, RouteMetrics.MinimumRetransmissionTimeTicksPerUnit));
+            writer.Write(RouteMetricAttributes.MinimumRetransmissionTime, EncodeTimeSpan(minimumRetransmissionTime, MinimumRetransmissionTimeTicksPerUnit));
         if (metrics.InitialReceiveWindow is { } initialReceiveWindow)
             writer.Write(RouteMetricAttributes.InitialReceiveWindow, initialReceiveWindow);
         if (metrics.QuickAck is { } quickAck)
@@ -663,6 +716,21 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             writer.Write(RouteMetricAttributes.CongestionControlAlgorithm, congestionControlAlgorithm);
         if (metrics.FastOpenNoCookie is { } fastOpenNoCookie)
             writer.Write(RouteMetricAttributes.FastOpenNoCookie, fastOpenNoCookie);
+    }
+
+    private static TimeSpan DecodeTimeSpan(uint value, long ticksPerUnit) => TimeSpan.FromTicks(value * ticksPerUnit);
+
+    private static uint EncodeTimeSpan(TimeSpan value, long ticksPerUnit)
+    {
+        if (value < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(value), value, "The interval must be non-negative.");
+
+        var units = value.Ticks / ticksPerUnit;
+        if (value.Ticks % ticksPerUnit != 0)
+            units++;
+        return units <= uint.MaxValue
+            ? (uint)units
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "The interval must fit in a 32-bit route metric after rounding.");
     }
 
     private static int GetAddressSize(AddressFamily addressFamily)

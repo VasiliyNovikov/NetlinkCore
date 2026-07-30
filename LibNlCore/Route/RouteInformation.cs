@@ -19,7 +19,8 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                                      RouteScope scope = RouteScope.Universe,
                                      RouteType type = RouteType.Unicast,
                                      byte typeOfService = 0,
-                                     RouteMetrics? metrics = null)
+                                     RouteMetrics? metrics = null,
+                                     bool onLink = false)
 {
     public AddressFamily AddressFamily => addressFamily;
     public IPAnyNetwork? Source => source;
@@ -36,6 +37,10 @@ public sealed class RouteInformation(AddressFamily addressFamily,
     public RouteType Type => type;
     public byte TypeOfService => typeOfService;
     public RouteMetrics? Metrics => metrics;
+    public bool OnLink => onLink;
+    internal bool CanModify => !OnLink && MutationLimitations == RouteMutationLimitations.None;
+
+    internal RouteMutationLimitations MutationLimitations { get; init; }
 
     public RouteInformation(IPAnyNetwork destination,
                             IPAnyNetwork? source = null,
@@ -50,13 +55,17 @@ public sealed class RouteInformation(AddressFamily addressFamily,
                             RouteScope scope = RouteScope.Universe,
                             RouteType type = RouteType.Unicast,
                             byte typeOfService = 0,
-                            RouteMetrics? metrics = null)
-        : this(destination.Address.AddressFamily, source, destination, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, preference, protocol, scope, type, typeOfService, metrics)
+                            RouteMetrics? metrics = null,
+                            bool onLink = false)
+        : this(destination.Address.AddressFamily, source, destination, gateway, inputInterfaceIndex, outputInterfaceIndex, priority, preferredSource, table, preference, protocol, scope, type, typeOfService, metrics, onLink)
     {
     }
 
     public RouteInformation WithOutputInterfaceIndex(int outputInterfaceIndex)
     {
-        return new(AddressFamily, Source, Destination, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Preference, Protocol, Scope, Type, TypeOfService, Metrics);
+        return new RouteInformation(AddressFamily, Source, Destination, Gateway, InputInterfaceIndex, outputInterfaceIndex, Priority, PreferredSource, Table, Preference, Protocol, Scope, Type, TypeOfService, Metrics, OnLink)
+        {
+            MutationLimitations = MutationLimitations
+        };
     }
 }
