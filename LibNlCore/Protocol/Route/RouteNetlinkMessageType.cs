@@ -13,4 +13,8 @@ public enum RouteNetlinkMessageType : ushort
     NewAddress    = 20, // RTM_NEWADDR
     DeleteAddress = 21, // RTM_DELADDR
     GetAddress    = 22, // RTM_GETADDR
+
+    NewRoute      = 24, // RTM_NEWROUTE
+    DeleteRoute   = 25, // RTM_DELROUTE
+    GetRoute      = 26, // RTM_GETROUTE
 }

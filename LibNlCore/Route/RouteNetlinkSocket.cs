@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 
 using LibNlCore.Protocol;
 using LibNlCore.Protocol.Route;
@@ -16,6 +17,17 @@ namespace LibNlCore.Route;
 
 public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
 {
+    private const long RoundTripTimeTicksPerUnit = TimeSpan.TicksPerMillisecond / 8;
+    private const long RoundTripTimeVarianceTicksPerUnit = TimeSpan.TicksPerMillisecond / 4;
+    private const long MinimumRetransmissionTimeTicksPerUnit = TimeSpan.TicksPerMillisecond;
+    private const RouteMessageFlags HarmlessRouteStatusFlags = RouteMessageFlags.Dead |
+                                                               RouteMessageFlags.NextHopOffload |
+                                                               RouteMessageFlags.LinkDown |
+                                                               RouteMessageFlags.NextHopTrap |
+                                                               RouteMessageFlags.Offloaded |
+                                                               RouteMessageFlags.Trap |
+                                                               RouteMessageFlags.OffloadFailed;
+
     #region Links
 
     public LinkInformation GetLink(string name)
@@ -199,12 +211,7 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
         writer.Type = RouteNetlinkMessageType.GetAddress;
         writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Dump;
         writer.Header.LinkIndex = (uint)linkIndex;
-        writer.Header.Family = addressFamily switch
-        {
-            AddressFamily.InterNetwork => LinuxAddressFamily.Inet,
-            AddressFamily.InterNetworkV6 => LinuxAddressFamily.Inet6,
-            _ => throw new ArgumentException($"Unsupported address family: {addressFamily}", nameof(addressFamily))
-        };
+        writer.Header.Family = ToLinuxAddressFamily(addressFamily);
         var addresses = new List<LinkAddress>();
         foreach (var message in Get(buffer, writer))
             if (message.Type == RouteNetlinkMessageType.NewAddress)
@@ -253,8 +260,8 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
     {
         writer.Header.LinkIndex = (uint)linkIndex;
         writer.Header.PrefixLength = address.PrefixLength;
-        writer.Header.Family = address.AddressFamily == AddressFamily.InterNetwork ? LinuxAddressFamily.Inet : LinuxAddressFamily.Inet6;
-        var size = address.AddressFamily == AddressFamily.InterNetwork ? 4 : 16;
+        writer.Header.Family = ToLinuxAddressFamily(address.AddressFamily);
+        var size = GetAddressSize(address.AddressFamily);
         var localBytes = writer.Attributes.PrepareWrite(RouteAddressAttributes.Local, size);
         address.Address.TryWriteBytes(localBytes, out _);
         var addressBytes = writer.Attributes.PrepareWrite(RouteAddressAttributes.Address, size);
@@ -264,6 +271,496 @@ public sealed class RouteNetlinkSocket() : NetlinkSocket(NetlinkFamily.Route)
             writer.Header.Flags |= RouteAddressFlags.NoDad;
             writer.Attributes.Write(RouteAddressAttributes.Flags, RouteAddressFlags.NoDad);
         }
+    }
+
+    #endregion
+
+    #region Routes
+
+    public RouteInformation[] GetRoutes(AddressFamily addressFamily = AddressFamily.Unspecified, uint? table = null, int? outputInterfaceIndex = null)
+    {
+        if (addressFamily == AddressFamily.Unspecified)
+            return [.. GetRoutes(AddressFamily.InterNetwork, table, outputInterfaceIndex), .. GetRoutes(AddressFamily.InterNetworkV6, table, outputInterfaceIndex)];
+
+        using var buffer = new NetlinkBuffer(NetlinkBufferSize.Large);
+        var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
+        writer.Type = RouteNetlinkMessageType.GetRoute;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Dump;
+        writer.Header.Family = ToLinuxAddressFamily(addressFamily);
+        var routes = new List<RouteInformation>();
+        foreach (var message in Get(buffer, writer))
+            if (message.Type == RouteNetlinkMessageType.NewRoute)
+            {
+                var route = ParseRoute(message);
+                if (table is not null && route.Table != table.Value)
+                    continue;
+                if (outputInterfaceIndex is not null && route.OutputInterfaceIndex != outputInterfaceIndex.Value)
+                    continue;
+                routes.Add(route);
+            }
+        return [.. routes];
+    }
+
+    public void AddRoute(RouteInformation route)
+    {
+        using var buffer = new NetlinkBuffer(NetlinkBufferSize.Small);
+        var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
+        writer.Type = RouteNetlinkMessageType.NewRoute;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Exclusive | NetlinkMessageFlags.Ack;
+        WriteRoute(writer, route, RouteOperation.Add);
+        Post(buffer, writer);
+    }
+
+    public void ReplaceRoute(RouteInformation route)
+    {
+        using var buffer = new NetlinkBuffer(NetlinkBufferSize.Small);
+        var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
+        writer.Type = RouteNetlinkMessageType.NewRoute;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Create | NetlinkMessageFlags.Replace | NetlinkMessageFlags.Ack;
+        WriteRoute(writer, route, RouteOperation.Replace);
+        Post(buffer, writer);
+    }
+
+    public void DeleteRoute(RouteInformation route)
+    {
+        using var buffer = new NetlinkBuffer(NetlinkBufferSize.Small);
+        var writer = GetWriter<RouteMessage, RouteAttributes>(buffer);
+        writer.Type = RouteNetlinkMessageType.DeleteRoute;
+        writer.Flags = NetlinkMessageFlags.Request | NetlinkMessageFlags.Ack;
+        WriteRoute(writer, route, RouteOperation.Delete);
+        Post(buffer, writer);
+    }
+
+    private static RouteInformation ParseRoute(RouteNetlinkMessage<RouteMessage, RouteAttributes> message)
+    {
+        var addressFamily = ToAddressFamily(message.Header.Family);
+        IPAnyNetwork? source = null;
+        IPAnyNetwork? destination = null;
+        IPAddress? gateway = null;
+        int? inputInterfaceIndex = null;
+        int? outputInterfaceIndex = null;
+        uint? priority = null;
+        IPAddress? preferredSource = null;
+        var table = (uint)message.Header.Table;
+        RoutePreference? preference = null;
+        RouteMetrics? metrics = null;
+        var mutationLimitations = (message.Header.Flags & ~(RouteMessageFlags.OnLink | HarmlessRouteStatusFlags)) == RouteMessageFlags.None
+            ? RouteMutationLimitations.None
+            : RouteMutationLimitations.Flags;
+        foreach (var attribute in message.Attributes)
+        {
+            switch (attribute.Name)
+            {
+                case RouteAttributes.Source:
+                    source = new IPAnyNetwork(new IPAnyAddress(attribute.Data), message.Header.SourceLength, false);
+                    break;
+                case RouteAttributes.Destination:
+                    destination = new IPAnyNetwork(new IPAnyAddress(attribute.Data), message.Header.DestinationLength, false);
+                    break;
+                case RouteAttributes.Gateway:
+                    gateway = new IPAddress(attribute.Data);
+                    break;
+                case RouteAttributes.Via:
+                    gateway = new IPAddress(attribute.Data[sizeof(ushort)..]);
+                    break;
+                case RouteAttributes.InputInterface:
+                    inputInterfaceIndex = attribute.AsValue<int>();
+                    break;
+                case RouteAttributes.OutputInterface:
+                    outputInterfaceIndex = attribute.AsValue<int>();
+                    break;
+                case RouteAttributes.Priority:
+                    priority = attribute.AsValue<uint>();
+                    break;
+                case RouteAttributes.PreferredSource:
+                    preferredSource = new IPAddress(attribute.Data);
+                    break;
+                case RouteAttributes.Table:
+                    table = attribute.AsValue<uint>();
+                    break;
+                case RouteAttributes.Preference:
+                    preference = attribute.AsValue<RoutePreference>();
+                    break;
+                case RouteAttributes.Metrics:
+                    metrics = ParseRouteMetrics(attribute.AsNested<RouteMetricAttributes>(), out var hasUnsupportedMetrics);
+                    if (hasUnsupportedMetrics)
+                        mutationLimitations |= RouteMutationLimitations.Metrics;
+                    break;
+                case RouteAttributes.NextHopId:
+                    mutationLimitations |= RouteMutationLimitations.NextHopId;
+                    break;
+                case RouteAttributes.Multipath:
+                    mutationLimitations |= RouteMutationLimitations.Multipath;
+                    break;
+                case RouteAttributes.Encap:
+                case RouteAttributes.EncapType:
+                    mutationLimitations |= RouteMutationLimitations.Encapsulation;
+                    break;
+                case RouteAttributes.Unspecified:
+                case RouteAttributes.Pad:
+                case RouteAttributes.UserId:
+                    break;
+                case RouteAttributes.CacheInfo:
+                    if (attribute.AsValue<RouteCacheInformation>().Expires != 0)
+                        mutationLimitations |= RouteMutationLimitations.Attributes;
+                    break;
+                default:
+                    mutationLimitations |= RouteMutationLimitations.Attributes;
+                    break;
+            }
+        }
+        return new RouteInformation(addressFamily,
+                                    source,
+                                    destination,
+                                    gateway,
+                                    inputInterfaceIndex,
+                                    outputInterfaceIndex,
+                                    priority,
+                                    preferredSource,
+                                    table,
+                                    preference,
+                                    message.Header.Protocol,
+                                    message.Header.Scope,
+                                    message.Header.RouteType,
+                                    message.Header.TypeOfService,
+                                    metrics,
+                                    message.Header.Flags.HasFlag(RouteMessageFlags.OnLink))
+        {
+            MutationLimitations = mutationLimitations
+        };
+    }
+
+    private static void WriteRoute(RouteNetlinkMessageWriter<RouteMessage, RouteAttributes> writer, RouteInformation route, RouteOperation operation)
+    {
+        ValidateRoute(route, operation);
+
+        writer.Header.Family = ToLinuxAddressFamily(route.AddressFamily);
+        writer.Header.SourceLength = route.Source?.Prefix ?? 0;
+        writer.Header.DestinationLength = route.Destination?.Prefix ?? 0;
+        writer.Header.Table = route.Table <= byte.MaxValue ? (byte)route.Table : (byte)RouteTable.Unspecified;
+        writer.Header.Protocol = route.Protocol;
+        writer.Header.Scope = route.Scope;
+        writer.Header.RouteType = route.Type;
+        writer.Header.TypeOfService = route.TypeOfService;
+        writer.Header.Flags = route.OnLink ? RouteMessageFlags.OnLink : RouteMessageFlags.None;
+
+        if (route.Source is { } source)
+            writer.Attributes.Write(RouteAttributes.Source, source.Address.Bytes);
+        if (route.Destination is { } destination)
+            writer.Attributes.Write(RouteAttributes.Destination, destination.Address.Bytes);
+        if (route.Gateway is { } gateway)
+            // RTA_GATEWAY=0 loses its family; RTA_VIA preserves an explicit IPv4 zero gateway.
+            if (gateway.AddressFamily == route.AddressFamily &&
+                !(route.AddressFamily == AddressFamily.InterNetwork && IsUnspecifiedAddress(gateway)))
+                writer.Attributes.Write(RouteAttributes.Gateway, ((IPAnyAddress)gateway).Bytes);
+            else
+            {
+                var data = writer.Attributes.PrepareWrite(RouteAttributes.Via, sizeof(ushort) + GetAddressSize(gateway.AddressFamily));
+                MemoryMarshal.Write(data, (ushort)ToLinuxAddressFamily(gateway.AddressFamily));
+                gateway.TryWriteBytes(data[sizeof(ushort)..], out _);
+            }
+        if (route.InputInterfaceIndex is { } inputInterfaceIndex)
+            writer.Attributes.Write(RouteAttributes.InputInterface, inputInterfaceIndex);
+        if (route.OutputInterfaceIndex is { } outputInterfaceIndex)
+            writer.Attributes.Write(RouteAttributes.OutputInterface, outputInterfaceIndex);
+        if (route.Priority is { } priority && !(operation == RouteOperation.Delete && priority == 0))
+            writer.Attributes.Write(RouteAttributes.Priority, priority);
+        if (route.PreferredSource is { } preferredSource)
+            writer.Attributes.Write(RouteAttributes.PreferredSource, ((IPAnyAddress)preferredSource).Bytes);
+        if (route.Table > byte.MaxValue)
+            writer.Attributes.Write(RouteAttributes.Table, route.Table);
+        if (route.Preference is { } preference)
+            writer.Attributes.Write(RouteAttributes.Preference, preference);
+        if (route.Metrics is { IsEmpty: false } metrics)
+        {
+            using var metricAttributes = writer.Attributes.WriteNested<RouteMetricAttributes>(RouteAttributes.Metrics);
+            WriteRouteMetrics(metricAttributes.Writer, metrics);
+        }
+    }
+
+    private static void ValidateRoute(RouteInformation route, RouteOperation operation)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+
+        if (route.MutationLimitations != RouteMutationLimitations.None)
+            throw new NotSupportedException($"The route cannot be modified because it contains unsupported netlink data: {route.MutationLimitations}.");
+        if (operation != RouteOperation.Add && route.OnLink)
+            throw new NotSupportedException("On-link routes cannot be replaced or deleted exactly because Linux does not include the on-link flag in the mutation key.");
+
+        var isReplace = operation == RouteOperation.Replace;
+        var isDelete = operation == RouteOperation.Delete;
+        if (route.Source is { } source)
+        {
+            if (route.AddressFamily != AddressFamily.InterNetwork && IsMismatchedPrefixSilentlyAccepted(route.AddressFamily, source))
+                throw new ArgumentException($"Route source family {source.Address.AddressFamily} does not match {route.AddressFamily}; Linux would reinterpret its bytes.", nameof(route));
+        }
+
+        if (route.Destination is { } destination && IsMismatchedPrefixSilentlyAccepted(route.AddressFamily, destination))
+            throw new ArgumentException($"Route destination family {destination.Address.AddressFamily} does not match {route.AddressFamily}; Linux would reinterpret its bytes.", nameof(route));
+
+        if (route is { AddressFamily: AddressFamily.InterNetwork, PreferredSource: { AddressFamily: AddressFamily.InterNetworkV6 } preferredSource })
+        {
+            throw new ArgumentException($"Route preferred-source family {preferredSource.AddressFamily} does not match {route.AddressFamily}; Linux would reinterpret its bytes.", nameof(route));
+        }
+        if (isDelete && route is { AddressFamily: AddressFamily.InterNetwork, PreferredSource: { } ipv4PreferredSource } && IsUnspecifiedAddress(ipv4PreferredSource))
+            throw new ArgumentException($"Linux treats preferred source {ipv4PreferredSource} as unspecified; omit PreferredSource.", nameof(route));
+
+        if (route.Gateway is { AddressFamily: AddressFamily.InterNetworkV6, ScopeId: not 0 } scopedGateway)
+        {
+            if (scopedGateway.ScopeId > int.MaxValue || route.OutputInterfaceIndex != (int)scopedGateway.ScopeId)
+                throw new ArgumentException($"IPv6 gateway scope ID {scopedGateway.ScopeId} is not encoded on the wire; use the same OutputInterfaceIndex.", nameof(route));
+        }
+
+        if (isDelete && route.OutputInterfaceIndex == 0)
+            throw new ArgumentException("Linux treats output interface index 0 as unspecified; omit OutputInterfaceIndex or use a nonzero index.", nameof(route));
+
+        if (operation != RouteOperation.Add && route.Table == RouteTable.Unspecified)
+            throw new ArgumentException("Linux resolves route table 0 to the main table; specify RouteTable.Main explicitly.", nameof(route));
+
+        if (route.Priority == 0 && isReplace && route.AddressFamily == AddressFamily.InterNetworkV6)
+            throw new ArgumentException("Linux replaces IPv6 route priority 0 with 1024, changing the replacement key; omit Priority.", nameof(route));
+
+        if (isDelete && route.Protocol == RouteProtocol.Unspecified)
+            throw new ArgumentException("Linux treats route protocol Unspecified as a wildcard when deleting routes; specify Protocol.", nameof(route));
+
+        if (isDelete && route.Priority == 0)
+            throw new ArgumentException("Linux treats route priority 0 as a wildcard when deleting routes; omit Priority or use a nonzero value.", nameof(route));
+
+        if (isDelete && route.AddressFamily == AddressFamily.InterNetwork)
+        {
+            if (route.Type == RouteType.Unspecified)
+                throw new ArgumentException("Linux treats route type Unspecified as a wildcard when deleting IPv4 routes; specify Type.", nameof(route));
+            if (route.Scope == RouteScope.NoWhere)
+                throw new ArgumentException("Linux treats route scope NoWhere as a wildcard when deleting IPv4 routes; specify Scope.", nameof(route));
+            if (route.Metrics is { } metrics)
+            {
+                if (metrics.CongestionControlAlgorithm is { } congestionControlAlgorithm && !TcpCongestionControlAlgorithms.IsAvailable(congestionControlAlgorithm))
+                    throw new ArgumentException($"Congestion control algorithm '{congestionControlAlgorithm}' is not currently available; Linux would reinterpret it as an unset deletion key.", nameof(route));
+            }
+        }
+    }
+
+    private static bool IsMismatchedPrefixSilentlyAccepted(AddressFamily routeFamily, IPAnyNetwork network)
+    {
+        if (network.Address.AddressFamily == routeFamily || network.Prefix is 0 or > 32)
+            return false;
+        if (routeFamily == AddressFamily.InterNetworkV6)
+            return network.Address.AddressFamily == AddressFamily.InterNetwork;
+        if (routeFamily != AddressFamily.InterNetwork || network.Address.AddressFamily != AddressFamily.InterNetworkV6)
+            return false;
+
+        return HasZeroHostBits(network.Address.Bytes[..4], network.Prefix);
+    }
+
+    private static bool IsUnspecifiedAddress(IPAddress address)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        address.TryWriteBytes(bytes, out var bytesWritten);
+        return bytes[..bytesWritten].IndexOfAnyExcept((byte)0) < 0;
+    }
+
+    private static bool HasZeroHostBits(ReadOnlySpan<byte> bytes, byte prefixLength)
+    {
+        var firstHostByte = prefixLength / 8;
+        var prefixBitsInByte = prefixLength % 8;
+        if (prefixBitsInByte != 0)
+        {
+            if ((bytes[firstHostByte] & (byte)(byte.MaxValue >> prefixBitsInByte)) != 0)
+                return false;
+            firstHostByte++;
+        }
+        return bytes[firstHostByte..].IndexOfAnyExcept((byte)0) < 0;
+    }
+
+    private enum RouteOperation
+    {
+        Add,
+        Replace,
+        Delete
+    }
+
+    private static RouteMetrics ParseRouteMetrics(NetlinkAttributeCollection<RouteMetricAttributes> attributes, out bool hasUnsupportedMetrics)
+    {
+        hasUnsupportedMetrics = false;
+        var locks = RouteMetricLocks.None;
+        uint? mtu = null;
+        uint? window = null;
+        TimeSpan? roundTripTime = null;
+        TimeSpan? roundTripTimeVariance = null;
+        uint? slowStartThreshold = null;
+        uint? congestionWindow = null;
+        uint? advertisedMss = null;
+        uint? reordering = null;
+        uint? hopLimit = null;
+        uint? initialCongestionWindow = null;
+        var features = RouteMetricFeatures.None;
+        TimeSpan? minimumRetransmissionTime = null;
+        uint? initialReceiveWindow = null;
+        uint? quickAck = null;
+        string? congestionControlAlgorithm = null;
+        uint? fastOpenNoCookie = null;
+
+        foreach (var attribute in attributes)
+            switch (attribute.Name)
+            {
+                case RouteMetricAttributes.Lock:
+                    locks = attribute.AsValue<RouteMetricLocks>();
+                    break;
+                case RouteMetricAttributes.Mtu:
+                    mtu = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.Window:
+                    window = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.RoundTripTime:
+                    roundTripTime = DecodeTimeSpan(attribute.AsValue<uint>(), RoundTripTimeTicksPerUnit);
+                    break;
+                case RouteMetricAttributes.RoundTripTimeVariance:
+                    roundTripTimeVariance = DecodeTimeSpan(attribute.AsValue<uint>(), RoundTripTimeVarianceTicksPerUnit);
+                    break;
+                case RouteMetricAttributes.SlowStartThreshold:
+                    slowStartThreshold = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.CongestionWindow:
+                    congestionWindow = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.AdvertisedMss:
+                    advertisedMss = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.Reordering:
+                    reordering = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.HopLimit:
+                    hopLimit = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.InitialCongestionWindow:
+                    initialCongestionWindow = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.Features:
+                    features = attribute.AsValue<RouteMetricFeatures>();
+                    break;
+                case RouteMetricAttributes.MinimumRetransmissionTime:
+                    minimumRetransmissionTime = DecodeTimeSpan(attribute.AsValue<uint>(), MinimumRetransmissionTimeTicksPerUnit);
+                    break;
+                case RouteMetricAttributes.InitialReceiveWindow:
+                    initialReceiveWindow = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.QuickAck:
+                    quickAck = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.CongestionControlAlgorithm:
+                    congestionControlAlgorithm = attribute.AsString();
+                    break;
+                case RouteMetricAttributes.FastOpenNoCookie:
+                    fastOpenNoCookie = attribute.AsValue<uint>();
+                    break;
+                case RouteMetricAttributes.Unspecified:
+                    break;
+                default:
+                    hasUnsupportedMetrics = true;
+                    break;
+            }
+
+        return new RouteMetrics(locks,
+                                mtu,
+                                window,
+                                roundTripTime,
+                                roundTripTimeVariance,
+                                slowStartThreshold,
+                                congestionWindow,
+                                advertisedMss,
+                                reordering,
+                                hopLimit,
+                                initialCongestionWindow,
+                                features,
+                                minimumRetransmissionTime,
+                                initialReceiveWindow,
+                                quickAck,
+                                congestionControlAlgorithm,
+                                fastOpenNoCookie);
+    }
+
+    private static void WriteRouteMetrics(NetlinkAttributeWriter<RouteMetricAttributes> writer, RouteMetrics metrics)
+    {
+        if (metrics.Locks != RouteMetricLocks.None)
+            writer.Write(RouteMetricAttributes.Lock, metrics.Locks);
+        if (metrics.Mtu is { } mtu)
+            writer.Write(RouteMetricAttributes.Mtu, mtu);
+        if (metrics.Window is { } window)
+            writer.Write(RouteMetricAttributes.Window, window);
+        if (metrics.RoundTripTime is { } roundTripTime)
+            writer.Write(RouteMetricAttributes.RoundTripTime, EncodeTimeSpan(roundTripTime, RoundTripTimeTicksPerUnit));
+        if (metrics.RoundTripTimeVariance is { } roundTripTimeVariance)
+            writer.Write(RouteMetricAttributes.RoundTripTimeVariance, EncodeTimeSpan(roundTripTimeVariance, RoundTripTimeVarianceTicksPerUnit));
+        if (metrics.SlowStartThreshold is { } slowStartThreshold)
+            writer.Write(RouteMetricAttributes.SlowStartThreshold, slowStartThreshold);
+        if (metrics.CongestionWindow is { } congestionWindow)
+            writer.Write(RouteMetricAttributes.CongestionWindow, congestionWindow);
+        if (metrics.AdvertisedMss is { } advertisedMss)
+            writer.Write(RouteMetricAttributes.AdvertisedMss, advertisedMss);
+        if (metrics.Reordering is { } reordering)
+            writer.Write(RouteMetricAttributes.Reordering, reordering);
+        if (metrics.HopLimit is { } hopLimit)
+            writer.Write(RouteMetricAttributes.HopLimit, hopLimit);
+        if (metrics.InitialCongestionWindow is { } initialCongestionWindow)
+            writer.Write(RouteMetricAttributes.InitialCongestionWindow, initialCongestionWindow);
+        if (metrics.Features != RouteMetricFeatures.None)
+            writer.Write(RouteMetricAttributes.Features, metrics.Features);
+        if (metrics.MinimumRetransmissionTime is { } minimumRetransmissionTime)
+            writer.Write(RouteMetricAttributes.MinimumRetransmissionTime, EncodeTimeSpan(minimumRetransmissionTime, MinimumRetransmissionTimeTicksPerUnit));
+        if (metrics.InitialReceiveWindow is { } initialReceiveWindow)
+            writer.Write(RouteMetricAttributes.InitialReceiveWindow, initialReceiveWindow);
+        if (metrics.QuickAck is { } quickAck)
+            writer.Write(RouteMetricAttributes.QuickAck, quickAck);
+        if (metrics.CongestionControlAlgorithm is { } congestionControlAlgorithm)
+            writer.Write(RouteMetricAttributes.CongestionControlAlgorithm, congestionControlAlgorithm);
+        if (metrics.FastOpenNoCookie is { } fastOpenNoCookie)
+            writer.Write(RouteMetricAttributes.FastOpenNoCookie, fastOpenNoCookie);
+    }
+
+    private static TimeSpan DecodeTimeSpan(uint value, long ticksPerUnit) => TimeSpan.FromTicks(value * ticksPerUnit);
+
+    private static uint EncodeTimeSpan(TimeSpan value, long ticksPerUnit)
+    {
+        if (value < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(value), value, "The interval must be non-negative.");
+
+        var units = value.Ticks / ticksPerUnit;
+        if (value.Ticks % ticksPerUnit != 0)
+            units++;
+        return units <= uint.MaxValue
+            ? (uint)units
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "The interval must fit in a 32-bit route metric after rounding.");
+    }
+
+    private static int GetAddressSize(AddressFamily addressFamily)
+    {
+        return addressFamily switch
+        {
+            AddressFamily.InterNetwork => 4,
+            AddressFamily.InterNetworkV6 => 16,
+            _ => throw new ArgumentException($"Unsupported address family: {addressFamily}", nameof(addressFamily))
+        };
+    }
+
+    private static LinuxAddressFamily ToLinuxAddressFamily(AddressFamily addressFamily)
+    {
+        return addressFamily switch
+        {
+            AddressFamily.InterNetwork => LinuxAddressFamily.Inet,
+            AddressFamily.InterNetworkV6 => LinuxAddressFamily.Inet6,
+            _ => throw new ArgumentException($"Unsupported address family: {addressFamily}", nameof(addressFamily))
+        };
+    }
+
+    private static AddressFamily ToAddressFamily(LinuxAddressFamily addressFamily)
+    {
+        return addressFamily switch
+        {
+            LinuxAddressFamily.Inet => AddressFamily.InterNetwork,
+            LinuxAddressFamily.Inet6 => AddressFamily.InterNetworkV6,
+            _ => throw new ArgumentException($"Unsupported address family: {addressFamily}", nameof(addressFamily))
+        };
     }
 
     #endregion

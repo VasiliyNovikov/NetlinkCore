@@ -4,10 +4,10 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="MSTest" Version="4.1.0" />
-    <PackageVersion Include="LinuxCore" Version="0.1.15" />
+    <PackageVersion Include="MSTest" Version="4.3.0" />
+    <PackageVersion Include="LinuxCore" Version="0.3.10" />
     <PackageVersion Include="NetNsCore" Version="0.2.1" />
-    <PackageVersion Include="NetworkingPrimitivesCore" Version="0.1.16" />
-    <PackageVersion Include="NuGet.Versioning" Version="7.3.0" />
+    <PackageVersion Include="NetworkingPrimitivesCore" Version="0.1.20" />
+    <PackageVersion Include="NuGet.Versioning" Version="7.6.0" />
   </ItemGroup>
 </Project>

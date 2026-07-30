@@ -72,6 +72,8 @@ public class Link
 
     public LinkAddressCollection Addresses => field ??= new(_socket, Index);
 
+    public LinkRouteCollection Routes => field ??= new(_socket, Index);
+
     public LinkFeatures Features => field ??= new(_ethToolSocketLazy.Value, Index);
 
     internal Link(RouteNetlinkSocket socket, Lazy<EthToolNetlinkSocket> ethToolSocketLazy, NetNs ns, LinkInformation info)
