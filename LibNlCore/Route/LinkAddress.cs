@@ -38,9 +38,9 @@ public sealed class LinkAddress : IEquatable<LinkAddress>
     }
 
     public override string ToString() => $"{Address}/{PrefixLength}";
-    public bool Equals(LinkAddress? other) => other is not null && (ReferenceEquals(this, other) || Address.Equals(other.Address) && PrefixLength == other.PrefixLength);
+    public bool Equals(LinkAddress? other) => other is not null && (ReferenceEquals(this, other) || Address.Equals(other.Address) && PrefixLength == other.PrefixLength && NoDad == other.NoDad);
     public override bool Equals(object? obj) => Equals(obj as LinkAddress);
-    public override int GetHashCode() => HashCode.Combine(Address, PrefixLength);
+    public override int GetHashCode() => HashCode.Combine(Address, PrefixLength, NoDad);
     public static bool operator ==(LinkAddress? left, LinkAddress? right) => left is null && right is null || left is not null && left.Equals(right);
     public static bool operator !=(LinkAddress? left, LinkAddress? right) => !(left == right);
 }
